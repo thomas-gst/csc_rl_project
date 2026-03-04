@@ -89,7 +89,7 @@ python eval.py --model models/pokerl_final.zip --render
 | Terrain                | One-hot : Électrik, Grassy, Misty, Psychic, Trick Room…                                       | 6      |
 | Gimmicks               | can_dynamax, can_mega_evolve, can_tera, can_z_move                                            | 4      |
 
-Les boosts de stats sont normalisés entre −1 et +1 (±6 → ±1). Toutes les valeurs de HP sont normalisées entre 0 et 1.
+Les boosts de stats sont normalisés entre −1 et +1 (±6 → ±1). Les PP sont normalisés entre 0 et 1 (`current_pp / max_pp`). Toutes les valeurs de HP sont normalisées entre 0 et 1. Les PP des moves adverses ne sont pas inclus car non communiqués par le serveur.
 
 ---
 

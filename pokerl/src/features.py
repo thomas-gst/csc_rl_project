@@ -6,15 +6,17 @@ Séparé de environment.py pour pouvoir grossir librement (météo, terrain,
 move-set adverse, etc.) sans polluer la classe d'environnement.
 
 ──────────────────────────────────────────────────────────────────────────
-Vue d'ensemble du vecteur d'observation  (tailles approximatives) :
-  • Pokémon actif allié       →  stats HP, type, boosts, statut, moves
-  • Pokémon actif adverse     →  HP, type, boosts, statut, moves connus
-  • Équipe alliée (bench)     →  HP + statut pour chaque slot (×5)
-  • Équipe adverse (bench)    →  HP + statut pour chaque slot (×5)
-  • Side conditions (hazards) →  nos hazards + les leurs
-  • Météo                     →  one-hot
-  • Terrain                   →  one-hot
-  • Gimmicks disponibles      →  dynamax, mega, tera, z-move
+Vue d'ensemble du vecteur d'observation  (taille totale : 490) :
+  • Pokémon actif allié       →  HP, type, boosts, statut              (33)
+  • Moves alliés (4 slots)    →  type, power, accuracy, catégorie, PP  (92 = 4×23)
+  • Pokémon actif adverse     →  HP, type, boosts, statut              (33)
+  • Moves adverses connus     →  type, power, accuracy, catégorie      (220 = 10×22, PP inconnus)
+  • Équipe alliée (bench)     →  HP + statut pour chaque slot (×5)     (40)
+  • Équipe adverse (bench)    →  HP + statut pour chaque slot (×5)     (40)
+  • Side conditions (hazards) →  nos hazards + les leurs               (14)
+  • Météo                     →  one-hot                                (8)
+  • Terrain                   →  one-hot                                (6)
+  • Gimmicks disponibles      →  dynamax, mega, tera, z-move            (4)
 ──────────────────────────────────────────────────────────────────────────
 """
 
@@ -124,11 +126,17 @@ def _boosts(pokemon: Optional[Pokemon]) -> np.ndarray: # TAILLE 7
     )
 
 
-def _move_features(move: Optional[Move]) -> np.ndarray: # TAILLE 22
-    """Vecteur caractérisant un move : power, accuracy, type (one-hot), catégorie."""
+def _move_features(move: Optional[Move], include_pp: bool = False) -> np.ndarray:
+    """Vecteur caractérisant un move : type (one-hot), power, accuracy, catégorie [+ PP].
+
+    :param include_pp: Si True, ajoute 1 valeur PP normalisée (current_pp / max_pp).
+                       Activé uniquement pour les moves alliés dont on connaît les PP.
+                       Taille : 22 (sans PP) ou 23 (avec PP).
+    """
+    size = NUM_TYPES + 4 + (1 if include_pp else 0)
     if move is None:
-        return np.zeros(NUM_TYPES + 4, dtype=np.float32)  # type + power + acc + cat(2)
-    power = (move.base_power or 0) / 250.0  # normalisé
+        return np.zeros(size, dtype=np.float32)
+    power = (move.base_power or 0) / 250.0
     accuracy = (move.accuracy if move.accuracy is not None else 100.0) / 100.0
     # Catégorie : physical / special (one-hot 2 bits, 00 = status)
     cat = np.zeros(2, dtype=np.float32)
@@ -137,11 +145,16 @@ def _move_features(move: Optional[Move]) -> np.ndarray: # TAILLE 22
         cat[0] = 1.0
     elif "special" in cat_name:
         cat[1] = 1.0
-    return np.concatenate([
-        _move_type_one_hot(move),  # 18
+    parts = [
+        _move_type_one_hot(move),                       # 18
         np.array([power, accuracy], dtype=np.float32),  # 2
-        cat,  # 2
-    ])
+        cat,                                             # 2
+    ]
+    if include_pp:
+        max_pp = move.max_pp or 1  # évite une division par zéro
+        pp_fraction = np.clip(move.current_pp / max_pp, 0.0, 1.0)
+        parts.append(np.array([pp_fraction], dtype=np.float32))  # 1
+    return np.concatenate(parts)
 
 
 def _pokemon_bench_features(mon: Optional[Pokemon]) -> np.ndarray: # TAILLE 8
@@ -170,9 +183,13 @@ def _active_pokemon_features(pokemon: Optional[Pokemon], battle: Battle) -> np.n
 
 
 def _active_moves_features(battle: Battle) -> np.ndarray:
-    """Features des 4 moves du Pokémon actif allié (slots fixes)."""
+    """Features des 4 moves du Pokémon actif allié (slots fixes).
+
+    Inclut les PP normalisés (current_pp / max_pp) car le serveur nous les
+    communique via les requêtes. Taille par slot : 23 (type+power+acc+cat+PP).
+    """
     parts: list[np.ndarray] = []
-    move_size = NUM_TYPES + 4  # 22
+    allied_move_size = NUM_TYPES + 5  # 23 (avec PP)
 
     if battle.active_pokemon is not None:
         all_moves = list(battle.active_pokemon.moves.values())
@@ -181,15 +198,19 @@ def _active_moves_features(battle: Battle) -> np.ndarray:
 
     for i in range(MAX_MOVES):
         if i < len(all_moves):
-            parts.append(_move_features(all_moves[i]))
+            parts.append(_move_features(all_moves[i], include_pp=True))
         else:
-            parts.append(np.zeros(move_size, dtype=np.float32))
-    return np.concatenate(parts)  # 4 × 22 = 88
+            parts.append(np.zeros(allied_move_size, dtype=np.float32))
+    return np.concatenate(parts)  # 4 × 23 = 92
 
 
 def _opponent_known_moves(battle: Battle) -> np.ndarray:
-    """Encode jusqu'aux 10 derniers moves connus de l'adversaire (max MAX_OPP_MOVES slots)."""
-    move_size = NUM_TYPES + 4  # 22
+    """Encode les moves connus de l'adversaire (jusqu'à MAX_OPP_MOVES moves).
+
+    Les PP adverses sont inconnus (le serveur ne les communique pas).
+    Taille par slot : 22 (pas de PP).
+    """
+    opp_move_size = NUM_TYPES + 4  # 22 (sans PP)
     opp = battle.opponent_active_pokemon
     parts: list[np.ndarray] = []
 
@@ -199,9 +220,9 @@ def _opponent_known_moves(battle: Battle) -> np.ndarray:
 
     for i in range(MAX_OPP_MOVES):
         if i < len(known):
-            parts.append(_move_features(known[i]))
+            parts.append(_move_features(known[i], include_pp=False))
         else:
-            parts.append(np.zeros(move_size, dtype=np.float32))
+            parts.append(np.zeros(opp_move_size, dtype=np.float32))
     return np.concatenate(parts)  # 10 × 22 = 220
 
 
@@ -314,12 +335,15 @@ def embed_battle(battle: Battle) -> np.ndarray:
 
 
 # Taille totale du vecteur d'observation
-# 33 + 88 + 33 + 220 + 40 + 40 + 14 + 8 + 6 + 4 = 486
+# 33 + 92 + 33 + 220 + 40 + 40 + 14 + 8 + 6 + 4 = 490
+#                ↑
+#        moves alliés : 4 × 23 = 92  (type+power+acc+cat+PP)
+#        moves adverses : 10 × 22 = 220 (PP inconnus, non inclus)
 OBSERVATION_SIZE: int = (
     (1 + NUM_TYPES + NUM_BOOSTS + len(STATUS_LIST))        # active allié   = 33
-    + MAX_MOVES * (NUM_TYPES + 4)                          # moves alliés   = 88
+    + MAX_MOVES * (NUM_TYPES + 5)                          # moves alliés   = 92  (avec PP)
     + (1 + NUM_TYPES + NUM_BOOSTS + len(STATUS_LIST))      # active adverse  = 33
-    + MAX_OPP_MOVES * (NUM_TYPES + 4)                      # moves adverses = 220
+    + MAX_OPP_MOVES * (NUM_TYPES + 4)                      # moves adverses = 220 (sans PP)
     + (MAX_TEAM - 1) * (1 + len(STATUS_LIST))              # banc allié     = 40
     + (MAX_TEAM - 1) * (1 + len(STATUS_LIST))              # banc adverse   = 40
     + 2 * (len(HAZARDS_LIST) + len(SCREENS_LIST))          # side conds     = 14
@@ -327,4 +351,4 @@ OBSERVATION_SIZE: int = (
     + len(FIELD_LIST)                                      # terrain        = 6
     + 4                                                    # gimmicks       = 4
 )
-# OBSERVATION_SIZE == 486
+# OBSERVATION_SIZE == 490
