@@ -4,4 +4,10 @@ sync.sh
 
 pokerl/logs/
 pokerl/__pycache__/
-pokerl/models/
+pokerl/models/*
+!pokerl/models/best/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
