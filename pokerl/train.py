@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from sb3_contrib import MaskablePPO, RecurrentPPO
 from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import (
+    BaseCallback,
     CallbackList,
     CheckpointCallback,
     EvalCallback,
@@ -40,6 +42,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from src.environment import make_env, PokeRLEnv, MaskableSingleAgentWrapper
 from src.rewards import build_reward
+
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -232,7 +235,7 @@ def train(cfg: dict, resume_path: str | None = None):
             best_model_save_path=str(model_dir / "best"),
             log_path=str(log_dir / "eval"),
             eval_freq=cfg["training"]["save_freq"],
-            n_eval_episodes=5,
+            n_eval_episodes=50,
             deterministic=True,
         )
     else:
@@ -241,9 +244,10 @@ def train(cfg: dict, resume_path: str | None = None):
             best_model_save_path=str(model_dir / "best"),
             log_path=str(log_dir / "eval"),
             eval_freq=cfg["training"]["save_freq"],
-            n_eval_episodes=5,
+            n_eval_episodes=50,
             deterministic=True,
         )
+
 
     callbacks = CallbackList([checkpoint_cb, eval_cb])
 

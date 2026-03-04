@@ -13,6 +13,7 @@ compatible Stable Baselines 3.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
@@ -20,6 +21,7 @@ from gymnasium.spaces import Box, Discrete
 
 from poke_env.battle.abstract_battle import AbstractBattle
 from poke_env.battle.battle import Battle
+from poke_env.player.battle_order import DefaultBattleOrder
 from poke_env.environment.singles_env import SinglesEnv
 from poke_env.environment.single_agent_wrapper import SingleAgentWrapper
 from poke_env.player import Player, RandomPlayer
@@ -29,6 +31,8 @@ from poke_env.ps_client.server_configuration import (
     ServerConfiguration,
 )
 from poke_env.teambuilder.teambuilder import Teambuilder
+
+logger = logging.getLogger(__name__)
 
 from .features import embed_battle, OBSERVATION_SIZE
 from .rewards import BaseReward, DenseReward
@@ -88,6 +92,9 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
 
         self._reward_fn: BaseReward = reward_fn or DenseReward()
 
+        # Compteur d'actions invalides (pour suivi)
+        self._invalid_action_count = 0
+
         # Observation space : vecteur continu de taille fixe
         self.observation_spaces = {
             agent: Box(
@@ -100,6 +107,31 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
         }
 
     # ── Interface poke-env ────────────────────────────────────────────────
+
+    @staticmethod
+    def action_to_order(
+        action: np.int64, battle: Battle, fake: bool = False, strict: bool = True
+    ):
+        """Convertit une action entière en BattleOrder.
+
+        Surcharge la méthode de ``SinglesEnv`` pour gérer proprement
+        le cas limite où ``valid_orders`` est vide (toute l'équipe KO,
+        ``battle.finished`` pas encore True).  Dans ce cas on renvoie
+        un ``DefaultBattleOrder`` au lieu de tenter un move impossible.
+        """
+        # Si aucune action légale n'existe, renvoyer l'ordre par défaut.
+        # Cela évite le warning « not in valid orders [] ».
+        if not battle.valid_orders:
+            return DefaultBattleOrder()
+
+        # Cas limite : toute l'équipe est KO → DefaultBattleOrder
+        # (valid_orders peut être non-vide car poke-env liste quand même
+        # les moves du Pokémon actif KO si force_switch est False)
+        if all(mon.fainted for mon in battle.team.values()):
+            return DefaultBattleOrder()
+
+        # Chemin normal
+        return SinglesEnv.action_to_order(action, battle, fake=fake, strict=strict)
 
     def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
         """Construit l'observation à partir de l'état de combat."""
@@ -126,9 +158,17 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
         Compatible ``sb3_contrib.common.maskable.utils.get_action_masks``.
         """
         battle = self.battle1
+        act_size = list(self.action_spaces.values())[0].n
         if battle is None or battle.finished:
             # Pas de combat en cours → tout est autorisé (sera ignoré)
-            act_size = list(self.action_spaces.values())[0].n
+            return np.ones(act_size, dtype=np.bool_)
+
+        # ── Cas limite : toute l'équipe est KO mais battle.finished n'est
+        #    pas encore True (le serveur n'a pas encore envoyé |win|).
+        #    valid_orders est vide → aucune action n'a de sens.
+        #    On renvoie all-True pour ne pas bloquer MaskablePPO ;
+        #    action_to_order renverra un DefaultBattleOrder.
+        if all(mon.fainted for mon in battle.team.values()):
             return np.ones(act_size, dtype=np.bool_)
 
         return self._build_action_mask(battle)
@@ -153,6 +193,11 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
             all_moves = list(battle.active_pokemon.moves.values())
             available_move_ids = {m.id for m in battle.available_moves}
 
+            # Ensemble des moves pouvant être utilisés en z-move
+            z_moveable_ids = set()
+            if battle.can_z_move and battle.active_pokemon.available_z_moves:
+                z_moveable_ids = {m.id for m in battle.active_pokemon.available_z_moves}
+
             for i, move in enumerate(all_moves):
                 if i >= 4:
                     break
@@ -164,8 +209,8 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
                     if battle.can_mega_evolve:
                         mask[10 + i] = True
 
-                    # Z-move
-                    if battle.can_z_move and battle.active_pokemon.available_z_moves:
+                    # Z-move — uniquement si CE move est dans available_z_moves
+                    if move.id in z_moveable_ids:
                         mask[14 + i] = True
 
                     # Dynamax
@@ -182,9 +227,16 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
         if battle.force_switch:
             mask[6:22] = False
 
+        # Trapped → pas de switches possibles (sauf si force_switch)
+        if battle.trapped and not battle.force_switch:
+            mask[0:6] = False
+
         # S'assurer qu'au moins une action est vraie (fallback)
         if not mask.any():
-            mask[6] = True  # struggle / default
+            # Aucun move/switch légal détecté : toute l'équipe est
+            # probablement KO (le serveur n'a pas encore envoyé |win|).
+            # On autorise tout — action_to_order renverra un DefaultBattleOrder.
+            mask[:] = True
 
         return mask
 
