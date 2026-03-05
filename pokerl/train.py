@@ -368,7 +368,7 @@ def train(cfg: dict, resume_path: str | None = None):
     except KeyboardInterrupt:
         print("\nInterruption — arrêt propre.")
     finally:
-        best_path = model_dir / "best_model.zip"
+        best_path = model_dir / f"{run_name}_{timestamp}.zip"
         if best_path.exists():
             print(f"Meilleur modèle sauvegardé : {best_path}")
         else:
