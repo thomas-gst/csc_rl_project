@@ -16,22 +16,21 @@ Usage :
 from __future__ import annotations
 
 import argparse
+import math
 import sys
-from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 from sb3_contrib import MaskablePPO, RecurrentPPO
-from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
+from sb3_contrib.common.maskable.evaluation import evaluate_policy as maskable_evaluate_policy
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import (
     BaseCallback,
-    CallbackList,
-    CheckpointCallback,
-    EvalCallback,
 )
-from stable_baselines3.common.type_aliases import MaybeCallback
+from stable_baselines3.common.evaluation import evaluate_policy
+from torch.utils.tensorboard import SummaryWriter
 
 from poke_env.player import RandomPlayer, MaxBasePowerPlayer, SimpleHeuristicsPlayer
 from poke_env.ps_client.server_configuration import ServerConfiguration
@@ -62,6 +61,109 @@ ALGO_REGISTRY: dict[str, type] = {
 MASKABLE_ALGOS = {"MaskablePPO", "RecurrentPPO"}
 
 
+class EvalTensorboardBestOnlyCallback(BaseCallback):
+    """Évalue périodiquement, log dans TensorBoard et sauvegarde uniquement le meilleur modèle."""
+
+    def __init__(
+        self,
+        eval_env: Any,
+        eval_freq: int,
+        n_eval_episodes: int,
+        tb_log_dir: Path,
+        best_model_path: Path,
+        deterministic: bool,
+        maskable: bool,
+    ):
+        super().__init__()
+        self.eval_env = eval_env
+        self.eval_freq = max(1, int(eval_freq))
+        self.n_eval_episodes = int(n_eval_episodes)
+        self.tb_log_dir = Path(tb_log_dir)
+        self.best_model_path = Path(best_model_path)
+        self.deterministic = deterministic
+        self.maskable = maskable
+        self.best_mean_reward = -math.inf
+        self._writer: SummaryWriter | None = None
+        self._has_evaluated = False
+
+    def _on_training_start(self) -> None:
+        self.tb_log_dir.mkdir(parents=True, exist_ok=True)
+        self.best_model_path.parent.mkdir(parents=True, exist_ok=True)
+        self._writer = SummaryWriter(log_dir=str(self.tb_log_dir))
+
+    def _log_requested_train_metrics(self) -> None:
+        """Relaye certaines métriques `train/*` de SB3 vers TensorBoard (au pas d'évaluation)."""
+        if self._writer is None:
+            return
+
+        logger_values = getattr(self.model, "logger", None)
+        name_to_value = getattr(logger_values, "name_to_value", None)
+        if not isinstance(name_to_value, dict):
+            return
+
+        requested_keys = {
+            "train/explained_variance",
+            "train/entropy_loss",
+            "train/approx_kl",
+            "train/clip_fraction",
+        }
+        for key in requested_keys:
+            value = name_to_value.get(key)
+            if value is not None:
+                self._writer.add_scalar(key, float(value), self.num_timesteps)
+
+    def _evaluate_and_log(self) -> None:
+        if self.maskable:
+            rewards, lengths = maskable_evaluate_policy(
+                self.model,
+                self.eval_env,
+                n_eval_episodes=self.n_eval_episodes,
+                deterministic=self.deterministic,
+                return_episode_rewards=True,
+                warn=False,
+                use_masking=True,
+            )
+        else:
+            rewards, lengths = evaluate_policy(
+                self.model,
+                self.eval_env,
+                n_eval_episodes=self.n_eval_episodes,
+                deterministic=self.deterministic,
+                return_episode_rewards=True,
+                warn=False,
+            )
+
+        mean_reward = sum(rewards) / len(rewards)
+        mean_ep_len = sum(lengths) / len(lengths)
+        self._has_evaluated = True
+
+        if self._writer is not None:
+            self._writer.add_scalar("eval/mean_reward", mean_reward, self.num_timesteps)
+            self._writer.add_scalar("eval/mean_ep_length", mean_ep_len, self.num_timesteps)
+            self._log_requested_train_metrics()
+            self._writer.flush()
+
+        if mean_reward > self.best_mean_reward:
+            self.best_mean_reward = mean_reward
+            self.model.save(str(self.best_model_path))
+            if self.verbose > 0:
+                print(
+                    f"[Eval] Nouveau best @ {self.num_timesteps} steps | "
+                    f"mean_reward={mean_reward:.3f} | sauvegardé: {self.best_model_path}.zip"
+                )
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.eval_freq == 0:
+            self._evaluate_and_log()
+        return True
+
+    def _on_training_end(self) -> None:
+        if not self._has_evaluated:
+            self._evaluate_and_log()
+        if self._writer is not None:
+            self._writer.close()
+
+
 def build_model(
     algo_name: str,
     env: Any,
@@ -89,12 +191,10 @@ def build_model(
     # --- Reprise d'un entraînement existant ---
     if resume_path:
         print(f"Reprise de l'entraînement depuis {resume_path}")
-        return cls.load(resume_path, env=env, tensorboard_log=str(log_dir))
+        return cls.load(resume_path, env=env, tensorboard_log=None)
 
     # --- Nouveau modèle ---
     seed = cfg["training"].get("seed")
-    log_dir_str = str(log_dir)
-
     if algo_name in ("MaskablePPO", "RecurrentPPO"):
         # Configuration commune PPO-like
         ppo = cfg["ppo"]
@@ -113,7 +213,7 @@ def build_model(
             vf_coef=ppo["vf_coef"],
             max_grad_norm=ppo["max_grad_norm"],
             policy_kwargs={"net_arch": net_arch},
-            tensorboard_log=log_dir_str,
+            tensorboard_log=None,
             seed=seed,
             verbose=1,
         )
@@ -139,7 +239,7 @@ def build_model(
             exploration_initial_eps=dqn["exploration_initial_eps"],
             exploration_final_eps=dqn["exploration_final_eps"],
             policy_kwargs={"net_arch": net_arch},
-            tensorboard_log=log_dir_str,
+            tensorboard_log=None,
             seed=seed,
             verbose=1,
         )
@@ -212,44 +312,34 @@ def train(cfg: dict, resume_path: str | None = None):
 
     # ── Dossiers ──
     model_dir = Path(cfg["training"]["model_dir"])
-    log_dir = Path(cfg["training"]["log_dir"])
+    base_log_dir = Path(cfg["training"]["log_dir"])
     model_dir.mkdir(parents=True, exist_ok=True)
-    log_dir.mkdir(parents=True, exist_ok=True)
+    base_log_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Modèle (factory) ──
     algo_name = cfg.get("algorithm", "MaskablePPO")
-    model = build_model(algo_name, env, cfg, log_dir, resume_path)
+    algo_cfg_key = "ppo" if algo_name in MASKABLE_ALGOS else "dqn"
+    algo_learning_rate = cfg.get(algo_cfg_key, {}).get("learning_rate")
+    ppo_ent_coef = cfg.get("ppo", {}).get("ent_coef", "na")
+    run_name = (
+        f"{algo_name}_lr{algo_learning_rate}"
+        f"_entcoef{ppo_ent_coef}_opp{train_opponent_name}"
+    )
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_log_dir = base_log_dir / f"{run_name}_{timestamp}"
+    run_log_dir.mkdir(parents=True, exist_ok=True)
+    model = build_model(algo_name, env, cfg, run_log_dir, resume_path)
 
     # ── Callbacks ──
-    checkpoint_cb = CheckpointCallback(
-        save_freq=cfg["training"]["save_freq"],
-        save_path=str(model_dir),
-        name_prefix="pokerl",
+    eval_best_only_cb = EvalTensorboardBestOnlyCallback(
+        eval_env=eval_env,
+        eval_freq=cfg["training"]["save_freq"],
+        n_eval_episodes=50,
+        tb_log_dir=run_log_dir,
+        best_model_path=model_dir / "best_model",
+        deterministic=True,
+        maskable=algo_name in MASKABLE_ALGOS,
     )
-
-    # MaskableEvalCallback pour les algos supportant l'action masking,
-    # EvalCallback standard pour DQN (pas de masquage).
-    if algo_name in MASKABLE_ALGOS:
-        eval_cb = MaskableEvalCallback(
-            eval_env,
-            best_model_save_path=str(model_dir / "best"),
-            log_path=str(log_dir / "eval"),
-            eval_freq=cfg["training"]["save_freq"],
-            n_eval_episodes=50,
-            deterministic=True,
-        )
-    else:
-        eval_cb = EvalCallback(
-            eval_env,
-            best_model_save_path=str(model_dir / "best"),
-            log_path=str(log_dir / "eval"),
-            eval_freq=cfg["training"]["save_freq"],
-            n_eval_episodes=50,
-            deterministic=True,
-        )
-
-
-    callbacks = CallbackList([checkpoint_cb, eval_cb])
 
     # ── Lancement ──
     total_timesteps = int(cfg["training"]["total_timesteps"])
@@ -266,20 +356,23 @@ def train(cfg: dict, resume_path: str | None = None):
     print(f"  Action mask  : {masking_label}")
     print(f"  Adv. train   : {train_opponent_name}")
     print(f"  Adv. eval    : {eval_opponent_name}")
+    print(f"  TB logs      : {run_log_dir}")
     print(f"{'='*60}\n")
 
     try:
         model.learn(
             total_timesteps=total_timesteps,
-            callback=callbacks,
+            callback=eval_best_only_cb,
             log_interval=cfg["training"]["log_interval"],
         )
     except KeyboardInterrupt:
-        print("\nInterruption — sauvegarde du modèle en cours…")
+        print("\nInterruption — arrêt propre.")
     finally:
-        final_path = str(model_dir / "pokerl_final")
-        model.save(final_path)
-        print(f"Modèle sauvegardé : {final_path}.zip")
+        best_path = model_dir / "best_model.zip"
+        if best_path.exists():
+            print(f"Meilleur modèle sauvegardé : {best_path}")
+        else:
+            print("Aucun modèle best n'a été sauvegardé.")
 
         # Nettoyage des environnements
         env.close()

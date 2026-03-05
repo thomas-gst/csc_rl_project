@@ -14,7 +14,7 @@ compatible Stable Baselines 3.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Any, Awaitable, Dict, Optional, Tuple, Union
 
 import numpy as np
 from gymnasium.spaces import Box, Discrete
@@ -124,6 +124,13 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
         if not battle.valid_orders:
             return DefaultBattleOrder()
 
+        valid_orders_str = [str(order) for order in battle.valid_orders]
+
+        # Cas où le serveur n'attend aucune décision explicite.
+        # Exemple: valid_orders == ['/choose default']
+        if len(valid_orders_str) == 1 and valid_orders_str[0] == "/choose default":
+            return DefaultBattleOrder()
+
         # Cas limite : toute l'équipe est KO → DefaultBattleOrder
         # (valid_orders peut être non-vide car poke-env liste quand même
         # les moves du Pokémon actif KO si force_switch est False)
@@ -162,6 +169,15 @@ class PokeRLEnv(SinglesEnv[np.ndarray]):
         if battle is None or battle.finished:
             # Pas de combat en cours → tout est autorisé (sera ignoré)
             return np.ones(act_size, dtype=np.bool_)
+
+        valid_orders_str = [str(order) for order in battle.valid_orders]
+
+        # Le serveur n'attend pas d'action explicite.
+        # On expose une action sentinelle unique pour éviter des choix arbitraires.
+        if len(valid_orders_str) == 1 and valid_orders_str[0] == "/choose default":
+            mask = np.zeros(act_size, dtype=np.bool_)
+            mask[0] = True
+            return mask
 
         # ── Cas limite : toute l'équipe est KO mais battle.finished n'est
         #    pas encore True (le serveur n'a pas encore envoyé |win|).
@@ -255,6 +271,60 @@ class MaskableSingleAgentWrapper(SingleAgentWrapper):
     def __init__(self, env: PokeRLEnv, opponent: Player):
         super().__init__(env, opponent)
         self._pokerl_env = env
+
+    @staticmethod
+    def _is_default_only_turn(battle: Battle | None) -> bool:
+        if battle is None:
+            return False
+        if len(battle.valid_orders) != 1:
+            return False
+        return str(battle.valid_orders[0]) == "/choose default"
+
+    def _safe_order_to_action(self, order: Any, battle: Battle) -> np.int64:
+        """Convertit un BattleOrder adverse en action discrète de façon robuste.
+
+        En cas de désynchronisation transitoire entre l'ordre choisi et l'état
+        courant du battle (ex: move plus présent dans la liste), on retombe sur
+        l'action sentinelle ``-2`` (default) au lieu de lever une exception.
+        """
+        try:
+            return self.env.order_to_action(
+                order, battle, fake=self.env.fake, strict=self.env.strict
+            )
+        except ValueError as err:
+            if battle.logger is not None:
+                battle.logger.warning(
+                    "Order/action mismatch for opponent in %s: %s. Falling back to /choose default.",
+                    battle.battle_tag,
+                    err,
+                )
+            return np.int64(-2)
+
+    def step(self, action: np.int64) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        assert self.env.battle1 is not None
+        assert self.env.battle2 is not None
+
+        agent_action = np.int64(-2) if self._is_default_only_turn(self.env.battle1) else action
+
+        opp_order = self.opponent.choose_move(self.env.battle2)
+        assert not isinstance(opp_order, Awaitable)
+        if self._is_default_only_turn(self.env.battle2):
+            opp_action = np.int64(-2)
+        else:
+            opp_action = self._safe_order_to_action(opp_order, self.env.battle2)
+
+        actions = {
+            self.env.agent1.username: agent_action,
+            self.env.agent2.username: opp_action,
+        }
+        obs, rewards, terms, truncs, infos = self.env.step(actions)
+        return (
+            obs[self.env.agent1.username],
+            rewards[self.env.agent1.username],
+            terms[self.env.agent1.username],
+            truncs[self.env.agent1.username],
+            infos[self.env.agent1.username],
+        )
 
     def action_masks(self) -> np.ndarray:
         """Retourne le masque d'action pour l'agent principal."""

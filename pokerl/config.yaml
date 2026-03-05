@@ -25,14 +25,14 @@ algorithm: "MaskablePPO"  # MaskablePPO | RecurrentPPO | DQN
 # Les deux gèrent l'Action Masking nativement (logits → -∞ sur actions invalides).
 # Pour RecurrentPPO : mettre policy: "MlpLstmPolicy" afin d'activer la mémoire LSTM.
 ppo:
-  learning_rate: 0.00005
+  learning_rate: 0.0001
   n_steps: 1024            # Pas par rollout avant update
   batch_size: 128
   n_epochs: 5
   gamma: 0.99              # Facteur de discount
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.01           # Coefficient d'entropie (incite l'exploration) donne des bons résultats, je vais réessayer le classique 0.01
+  ent_coef: 0.02           # Coefficient d'entropie (incite l'exploration) donne des bons résultats, je vais réessayer le classique 0.01
   vf_coef: 0.5
   max_grad_norm: 0.5
   policy: "MlpPolicy"      # MlpPolicy (MaskablePPO) | MlpLstmPolicy (RecurrentPPO)
@@ -64,14 +64,13 @@ dqn:
 
 # ─── Entraînement ───────────────────────────────────────────────────────────
 training:
-  total_timesteps: 500_000  # Steps totaux d'entraînement
-  log_interval: 10          # Fréquence de log (en rollouts)
-  save_freq: 10_000         # Fréquence de sauvegarde du modèle (en steps)
-  model_dir: "models"       # Dossier de sauvegarde
-  log_dir: "logs"           # Dossier TensorBoard
+  total_timesteps: 1_000_000  # Steps totaux d'entraînement
+  log_interval: 10            # Logs console SB3 (rollouts), PAS envoyé à TensorBoard
+  save_freq: 10_000           # Fréquence d'évaluation (steps) + points TensorBoard (eval/*)
+  model_dir: "models"         # Dossier modèle ; seul le meilleur est conservé (best_model.zip)
+  log_dir: "logs"             # Dossier TensorBoard (sous-dossier eval/)
   seed: 42
-  opponent: "random"        # Adversaire pendant l'entraînement : random | max_power | heuristic
-  win_rate_window: 30       # Taille de la fenêtre glissante pour le taux de victoire
+  opponent: "heuristic"        # Adversaire pendant l'entraînement : random | max_power | heuristic
 
 # ─── Évaluation ──────────────────────────────────────────────────────────────
 eval:
