@@ -8,10 +8,15 @@ pokerl/__pycache__/
 pokerl/models/*
 !pokerl/models/best/
 summaries/
+pokerl/src/__pycache__/*
 
 POKERL_ARCHITECTURE.md
 
 # macOS
 .DS_Store
 **/.DS_Store
+
+logs/*
+train.log
+models/*
 

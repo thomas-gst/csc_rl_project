@@ -26,13 +26,11 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from sb3_contrib import MaskablePPO, RecurrentPPO
-from sb3_contrib.common.maskable.evaluation import evaluate_policy as maskable_evaluate_policy
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
 )
-from stable_baselines3.common.evaluation import evaluate_policy
 
 try:
     import wandb
@@ -161,34 +159,49 @@ class EvalBestOnlyCallback(BaseCallback):
         return metrics
 
     def _evaluate_and_log(self) -> None:
-        if self.maskable:
-            rewards, lengths = maskable_evaluate_policy(
-                self.model,
-                self.eval_env,
-                n_eval_episodes=self.n_eval_episodes,
-                deterministic=self.deterministic,
-                return_episode_rewards=True,
-                warn=False,
-                use_masking=True,
-            )
-        else:
-            rewards, lengths = evaluate_policy(
-                self.model,
-                self.eval_env,
-                n_eval_episodes=self.n_eval_episodes,
-                deterministic=self.deterministic,
-                return_episode_rewards=True,
-                warn=False,
-            )
+        rewards: list[float] = []
+        lengths: list[int] = []
+        wins = 0
+
+        for _ in range(self.n_eval_episodes):
+            obs, _info = self.eval_env.reset()
+            done = False
+            episode_reward = 0.0
+            episode_length = 0
+
+            while not done:
+                if self.maskable:
+                    action_masks = self.eval_env.action_masks()
+                    action, _ = self.model.predict(
+                        obs,
+                        deterministic=self.deterministic,
+                        action_masks=action_masks,
+                    )
+                else:
+                    action, _ = self.model.predict(obs, deterministic=self.deterministic)
+
+                obs, reward, terminated, truncated, _step_info = self.eval_env.step(action)
+                episode_reward += float(reward)
+                episode_length += 1
+                done = bool(terminated or truncated)
+
+            battle = self.eval_env._pokerl_env.battle1
+            if battle is not None and battle.won:
+                wins += 1
+
+            rewards.append(episode_reward)
+            lengths.append(episode_length)
 
         mean_reward = sum(rewards) / len(rewards)
         mean_ep_len = sum(lengths) / len(lengths)
+        win_rate = wins / self.n_eval_episodes
         self._has_evaluated = True
 
         if self.wandb_enabled and wandb is not None and wandb.run is not None:
             payload = {
                 "eval/mean_reward": mean_reward,
                 "eval/mean_ep_length": mean_ep_len,
+                "eval/win_rate": win_rate,
             }
             payload.update(self._collect_requested_train_metrics())
             wandb.log(payload, step=self.num_timesteps)
@@ -401,6 +414,7 @@ def train(cfg: DictConfig, resume_path: str | None = None):
             save_code=bool(cfg.wandb.save_code),
             config=OmegaConf.to_container(cfg, resolve=True),
             dir=str(run_log_dir),
+            settings=wandb.Settings(quiet=True),
         )
 
     model = build_model(algo_name, env, cfg, run_log_dir, resume_path)
@@ -464,7 +478,10 @@ def train(cfg: DictConfig, resume_path: str | None = None):
         env.close()
         eval_env.close()
         if wandb is not None and wandb.run is not None:
-            wandb.finish()
+            try:
+                wandb.finish()
+            except Exception as err:
+                print(f"[W&B] warning: échec de wandb.finish() ({err}).")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
