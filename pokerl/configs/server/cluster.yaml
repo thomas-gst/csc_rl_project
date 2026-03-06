@@ -1,0 +1,4 @@
+# Server configuration for distributed Ray cluster
+# Each worker connects to localhost:8000 (the server running on that machine)
+host: localhost
+port: 8000

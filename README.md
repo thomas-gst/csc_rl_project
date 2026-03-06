@@ -15,10 +15,11 @@ Agent RL entraîné à jouer à Pokémon Showdown en utilisant **poke-env**, **G
 | `sb3-contrib`       | MaskablePPO, RecurrentPPO      |
 | `hydra-core`        | Chargement de config modulaire |
 | `wandb`             | Logging expérimental centralisé |
+| `ray[rllib]`        | Entraînement distribué PPO      |
 | Node.js             | Serveur local Pokémon Showdown |
 
 ```bash
-pip install poke-env stable-baselines3 sb3-contrib gymnasium hydra-core wandb
+pip install poke-env stable-baselines3 sb3-contrib gymnasium hydra-core wandb "ray[rllib]"
 ```
 
 Le serveur local doit être cloné et buildé une fois (voir `setup.md`).
@@ -81,6 +82,69 @@ python train.py wandb.project=YOUR_PROJECT wandb.entity=YOUR_TEAM
 python eval.py eval.model_path=models/pokerl_final.zip
 python eval.py eval.model_path=models/best/best_model.zip eval.opponent=heuristic eval.n_battles=200
 python eval.py eval.model_path=models/pokerl_final.zip eval.render=true
+```
+
+**4. Entraînement distribué RLlib (PPO)** :
+
+```bash
+python distributed_train.py
+python distributed_train.py distributed.num_rollout_workers=4 training.total_timesteps=2000000
+```
+
+---
+
+## Entraînement distribué avec Ray (head + workers)
+
+### Option A — Local (une seule machine)
+
+```bash
+cd pokerl
+python distributed_train.py distributed.num_rollout_workers=4
+```
+
+### Option B — Cluster Ray multi-machines
+
+1) **Sur le nœud head** :
+
+```bash
+ray start --head --node-ip-address=<HEAD_IP> --port=6379
+```
+
+2) **Sur chaque worker** :
+
+```bash
+ray start --address=<HEAD_IP>:6379
+```
+
+3) **Lancer l'entraînement** (depuis une machine ayant accès au code + serveur Showdown) :
+
+```bash
+cd pokerl
+python distributed_train.py distributed.ray.address=auto
+```
+
+Ou en fixant explicitement l'adresse :
+
+```bash
+python distributed_train.py distributed.ray.address=<HEAD_IP>:6379
+```
+
+### Paramètres Hydra utiles
+
+- `distributed.num_rollout_workers` : nombre de workers RLlib
+- `distributed.num_envs_per_worker` : nb d'environnements parallèles par worker
+- `distributed.train_batch_size` : taille de batch PPO côté RLlib
+- `distributed.checkpoint_freq_iters` : fréquence de sauvegarde
+- `training.total_timesteps` : critère d'arrêt principal
+- `distributed.wandb_sync` : active/désactive le logging W&B dans ce script
+- `distributed.use_action_masking` : active le masque d'actions RLlib (recommandé, défaut=true)
+
+Le script écrit les checkpoints dans `pokerl/models/rllib_checkpoints/`.
+
+Exemple (désactiver le masking pour comparaison) :
+
+```bash
+python distributed_train.py distributed.use_action_masking=false
 ```
 
 ---

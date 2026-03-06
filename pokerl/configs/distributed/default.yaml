@@ -1,0 +1,23 @@
+framework: torch
+num_rollout_workers: 3
+num_envs_per_worker: 1
+rollout_fragment_length: 200
+train_batch_size: 4000
+sgd_minibatch_size: 128
+num_sgd_iter: 10
+max_iterations: 500
+checkpoint_freq_iters: 10
+checkpoint_subdir: rllib_checkpoints
+env_log_level: WARNING
+use_action_masking: false
+trainer_num_gpus: 0
+shutdown_ray_on_exit: false
+wandb_sync: true
+
+ray:
+  address: null
+  num_cpus: null
+  num_gpus: null
+  include_dashboard: false
+  log_to_driver: true
+  ignore_reinit_error: true

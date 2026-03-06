@@ -3,6 +3,7 @@ defaults:
   - battle: gen8randombattle
   - reward: dense
   - training: default
+  - distributed: default
   - eval: default
   - algorithm: maskableppo
   - models@ppo: ppo

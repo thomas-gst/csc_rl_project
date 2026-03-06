@@ -37,7 +37,8 @@ cp config/config-example.js config/config.js
 ```
 # Lancement d'un serveur de jeu et redirection de port
 Maintenant que tout est installé, on peut lancer un serveur de jeu. 
-```bashcd pokemon-showdown
+```bash
+cd pokemon-showdown
 node pokemon-showdown start --no-security
 ```
 Par défaut, le serveur écoute sur le port 8000.
