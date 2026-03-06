@@ -1,11 +1,13 @@
 pokemon-showdown
 sync.sh
 .rsyncignore
+.gitignore
 
 pokerl/logs/*
 pokerl/__pycache__/
 pokerl/models/*
 !pokerl/models/best/
+summaries/
 
 POKERL_ARCHITECTURE.md
 

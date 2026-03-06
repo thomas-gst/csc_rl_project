@@ -16,6 +16,7 @@ Usage :
 
 from __future__ import annotations
 
+import logging
 import math
 import sys
 from datetime import datetime
@@ -345,6 +346,7 @@ def train(cfg: DictConfig, resume_path: str | None = None):
         opponent=opponent,
         battle_format=battle_format,
         server_configuration=server_cfg,
+        log_level=logging.WARNING,
     )
 
     # ── Environnement d'évaluation ──
@@ -356,6 +358,7 @@ def train(cfg: DictConfig, resume_path: str | None = None):
         opponent=eval_opponent,
         battle_format=battle_format,
         server_configuration=server_cfg,
+        log_level=logging.WARNING,
     )
 
     # ── Dossiers ──

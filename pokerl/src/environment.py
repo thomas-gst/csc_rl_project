@@ -339,6 +339,7 @@ def make_env(
     opponent: Optional[Player] = None,
     battle_format: str = "gen8randombattle",
     server_configuration: Optional[ServerConfiguration] = None,
+    log_level: Optional[int] = None,
 ) -> MaskableSingleAgentWrapper:
     """Crée un ``gymnasium.Env`` mono-agent avec action masking.
 
@@ -346,6 +347,7 @@ def make_env(
     :param opponent: Adversaire (``Player``). Par défaut ``RandomPlayer``.
     :param battle_format: Format de combat Showdown.
     :param server_configuration: Configuration du serveur.
+    :param log_level: Niveau de logging (logging.INFO, logging.WARNING, etc.).
     :return: Environnement Gymnasium prêt pour SB3 / MaskablePPO.
     """
     server_cfg = server_configuration or LocalhostServerConfiguration
@@ -355,12 +357,14 @@ def make_env(
         battle_format=battle_format,
         server_configuration=server_cfg,
         start_listening=True,
+        log_level=log_level,
     )
 
     if opponent is None:
         opponent = RandomPlayer(
             battle_format=battle_format,
             server_configuration=server_cfg,
+            log_level=log_level,
         )
 
     return MaskableSingleAgentWrapper(env, opponent)

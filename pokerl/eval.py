@@ -10,6 +10,7 @@ Usage :
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -75,6 +76,7 @@ def evaluate(
         opponent=opponent,
         battle_format=battle_format,
         server_configuration=server_cfg,
+        log_level=logging.WARNING,
     )
 
     model = MaskablePPO.load(model_path, env=env)
