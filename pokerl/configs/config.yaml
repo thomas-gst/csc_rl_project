@@ -1,0 +1,18 @@
+defaults:
+  - server: localhost
+  - battle: gen8randombattle
+  - reward: dense
+  - training: default
+  - eval: default
+  - algorithm: maskableppo
+  - models@ppo: ppo
+  - models@dqn: dqn
+  - wandb: default
+  - _self_
+
+resume_path: null
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

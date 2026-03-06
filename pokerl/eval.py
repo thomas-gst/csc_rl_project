@@ -3,19 +3,19 @@
 eval.py — Script d'évaluation d'un modèle MaskablePPO entraîné.
 
 Usage :
-    python eval.py --model models/best/best_model.zip
-    python eval.py --model models/pokerl_final.zip --opponent heuristic --battles 200
-    python eval.py --model models/pokerl_final.zip --render
+    python eval.py eval.model_path=models/best/best_model.zip
+    python eval.py eval.model_path=models/pokerl_final.zip eval.opponent=heuristic eval.n_battles=200
+    python eval.py eval.model_path=models/pokerl_final.zip eval.render=true
 """
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
+import hydra
 import numpy as np
-import yaml
+from omegaconf import DictConfig, OmegaConf
 from sb3_contrib import MaskablePPO
 
 from poke_env.player import RandomPlayer, MaxBasePowerPlayer, SimpleHeuristicsPlayer
@@ -32,14 +32,10 @@ from src.rewards import build_reward
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_config(path: str | Path) -> dict:
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
 
-
-def make_server_config(cfg: dict) -> ServerConfiguration:
-    host = cfg["server"]["host"]
-    port = cfg["server"]["port"]
+def make_server_config(cfg: DictConfig) -> ServerConfiguration:
+    host = cfg.server.host
+    port = cfg.server.port
     return ServerConfiguration(
         f"ws://{host}:{port}/showdown/websocket",
         f"http://{host}:{port}/action.php?",
@@ -62,7 +58,7 @@ def make_opponent(name: str, battle_format: str, server_cfg: ServerConfiguration
 
 def evaluate(
     model_path: str,
-    cfg: dict,
+    cfg: DictConfig,
     opponent_name: str = "random",
     n_battles: int = 100,
     render: bool = False,
@@ -70,8 +66,8 @@ def evaluate(
     """Évalue un modèle entraîné sur *n_battles* combats."""
 
     server_cfg = make_server_config(cfg)
-    battle_format = cfg["battle"]["format"]
-    reward_fn = build_reward(cfg["reward"])
+    battle_format = cfg.battle.format
+    reward_fn = build_reward(OmegaConf.to_container(cfg.reward, resolve=True))
 
     opponent = make_opponent(opponent_name, battle_format, server_cfg)
     env = make_env(
@@ -138,49 +134,20 @@ def evaluate(
 # Point d'entrée
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="PokeRL — Evaluate MaskablePPO")
-    parser.add_argument(
-        "--model", "-m",
-        type=str,
-        required=True,
-        help="Chemin vers le modèle .zip entraîné",
-    )
-    parser.add_argument(
-        "--config", "-c",
-        type=str,
-        default=str(SCRIPT_DIR / "config.yaml"),
-        help="Chemin vers le fichier de configuration YAML",
-    )
-    parser.add_argument(
-        "--opponent", "-o",
-        type=str,
-        default=None,
-        help="Type d'adversaire : random | max_power | heuristic",
-    )
-    parser.add_argument(
-        "--battles", "-b",
-        type=int,
-        default=None,
-        help="Nombre de combats d'évaluation",
-    )
-    parser.add_argument(
-        "--render",
-        action="store_true",
-        help="Afficher le rendu du combat dans le terminal",
-    )
-    args = parser.parse_args()
-
-    cfg = load_config(args.config)
-    opponent_name = args.opponent or cfg["eval"]["opponent"]
-    n_battles = args.battles or cfg["eval"]["n_battles"]
+@hydra.main(version_base=None, config_path="configs", config_name="config")
+def main(cfg: DictConfig):
+    model_path = cfg.eval.model_path
+    if not model_path:
+        raise ValueError(
+            "Aucun modèle fourni. Lance: python eval.py eval.model_path=models/best_model.zip"
+        )
 
     evaluate(
-        model_path=args.model,
+        model_path=model_path,
         cfg=cfg,
-        opponent_name=opponent_name,
-        n_battles=n_battles,
-        render=args.render,
+        opponent_name=cfg.eval.opponent,
+        n_battles=int(cfg.eval.n_battles),
+        render=bool(cfg.eval.render),
     )
 
 

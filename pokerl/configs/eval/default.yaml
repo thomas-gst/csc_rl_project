@@ -1,0 +1,4 @@
+n_battles: 100
+opponent: random
+model_path: ""
+render: false

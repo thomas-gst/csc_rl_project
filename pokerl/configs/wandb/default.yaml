@@ -1,0 +1,9 @@
+enabled: true
+project: pokerl
+entity: csc_rl_pokemon_project
+name: null
+tags: []
+notes: ""
+mode: online
+log_freq_steps: 1000
+save_code: false

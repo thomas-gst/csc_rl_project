@@ -7,6 +7,8 @@ pokerl/__pycache__/
 pokerl/models/*
 !pokerl/models/best/
 
+POKERL_ARCHITECTURE.md
+
 # macOS
 .DS_Store
 **/.DS_Store

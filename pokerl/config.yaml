@@ -1,78 +1,10 @@
-# ── PokeRL — Hyperparamètres ──────────────────────────────────────────────────
-
-# ─── Serveur Pokemon Showdown ────────────────────────────────────────────────
-server:
-  host: "localhost"
-  port: 8000
-
-# ─── Format de combat ───────────────────────────────────────────────────────
-battle:
-  format: "gen8randombattle"
-  num_pokemon: 6 # nombre de pokémon par équipe (random battle = 6)
-
-# ─── Récompenses (DenseReward) ───────────────────────────────────────────────
-reward:
-  class: "DenseReward" # Classe de récompense à utiliser (voir rewards.py)
-  fainted_value: 2.0 # Bonus par K.O. adverse, malus par K.O. allié
-  hp_value: 1.0 # Poids des PV restants (normalisé 0-1 par pokémon)
-  status_value: 0.5 # Bonus/malus par statut infligé/subi
-  victory_value: 15.0 # Bonus/malus pour victoire/défaite
-
-# ─── Choix de l'algorithme ──────────────────────────────────────────────────────────────
-algorithm: "MaskablePPO"  # MaskablePPO | RecurrentPPO | DQN
-
-# ─── MaskablePPO / RecurrentPPO (sb3-contrib) ───────────────────────────────────────
-# Les deux gèrent l'Action Masking nativement (logits → -∞ sur actions invalides).
-# Pour RecurrentPPO : mettre policy: "MlpLstmPolicy" afin d'activer la mémoire LSTM.
-ppo:
-  learning_rate: 0.0001
-  n_steps: 1024            # Pas par rollout avant update
-  batch_size: 128
-  n_epochs: 5
-  gamma: 0.99              # Facteur de discount
-  gae_lambda: 0.95
-  clip_range: 0.2
-  ent_coef: 0.02           # Coefficient d'entropie (incite l'exploration) donne des bons résultats, je vais réessayer le classique 0.01
-  vf_coef: 0.5
-  max_grad_norm: 0.5
-  policy: "MlpPolicy"      # MlpPolicy (MaskablePPO) | MlpLstmPolicy (RecurrentPPO)
-  net_arch:                # Architecture du réseau (shared layers)
-    - 256
-    - 256
-
-# ─── DQN (stable-baselines3) ──────────────────────────────────────────────────────────────
-# ⚠️  DQN ne gère PAS l'Action Masking nativement (contrairement à MaskablePPO
-#     et RecurrentPPO). Les actions invalides restent sélectionnables ; l'env
-#     tombera sur un fallback aléatoire. Préférer MaskablePPO pour Pokémon.
-# ℹ️  DQN dispose d'un replay buffer (off-policy) : plus efficace en échantillons
-#     mais moins stable que PPO sur des espaces d'action discrets masqués.
-dqn:
-  learning_rate: 0.0001
-  buffer_size: 50_000      # Taille du replay buffer
-  learning_starts: 1_000   # Steps avant le premier update
-  batch_size: 32
-  gamma: 0.99
-  tau: 1.0                 # Taux de mise à jour du réseau cible (soft update)
-  target_update_interval: 1_000
-  exploration_fraction: 0.1
-  exploration_initial_eps: 1.0
-  exploration_final_eps: 0.05
-  policy: "MlpPolicy"
-  net_arch:
-    - 256
-    - 256
-
-# ─── Entraînement ───────────────────────────────────────────────────────────
-training:
-  total_timesteps: 1_000_000  # Steps totaux d'entraînement
-  log_interval: 10            # Logs console SB3 (rollouts), PAS envoyé à TensorBoard
-  save_freq: 10_000           # Fréquence d'évaluation (steps) + points TensorBoard (eval/*)
-  model_dir: "models"         # Dossier modèle ; seul le meilleur est conservé (best_model.zip)
-  log_dir: "logs"             # Dossier TensorBoard (sous-dossier eval/)
-  seed: 42
-  opponent: "heuristic"        # Adversaire pendant l'entraînement : random | max_power | heuristic
-
-# ─── Évaluation ──────────────────────────────────────────────────────────────
-eval:
-  n_battles: 100            # Nombre de combats pour évaluer
-  opponent: "random"     # Adversaire pour l'évaluation : random | max_power | heuristic
+# Deprecated monolithic config.
+#
+# PokeRL now uses Hydra config composition under `pokerl/configs/`.
+# Main entry point: `pokerl/configs/config.yaml`
+#
+# Examples:
+#   python train.py
+#   python train.py algorithm=recurrentppo
+#   python train.py wandb.project=my_project wandb.entity=my_team
+#   python eval.py eval.model_path=models/best_model.zip

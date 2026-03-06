@@ -13,11 +13,12 @@ Agent RL entraîné à jouer à Pokémon Showdown en utilisant **poke-env**, **G
 | `gymnasium`         | Interface standard RL          |
 | `stable-baselines3` | Algorithmes DQN, PPO…          |
 | `sb3-contrib`       | MaskablePPO, RecurrentPPO      |
-| `pyyaml`            | Lecture de `config.yaml`       |
+| `hydra-core`        | Chargement de config modulaire |
+| `wandb`             | Logging expérimental centralisé |
 | Node.js             | Serveur local Pokémon Showdown |
 
 ```bash
-pip install poke-env stable-baselines3 sb3-contrib gymnasium pyyaml
+pip install poke-env stable-baselines3 sb3-contrib gymnasium hydra-core wandb
 ```
 
 Le serveur local doit être cloné et buildé une fois (voir `setup.md`).
@@ -32,7 +33,17 @@ csc_rl_project/
 ├── examples/
 │   └── quick_start.py     # Script de test de la librairie
 └── pokerl/
-    ├── config.yaml        # Hyperparamètres (seul fichier à éditer)
+  ├── config.yaml        # Fichier de transition (deprecated)
+  ├── configs/           # Arborescence Hydra
+  │   ├── config.yaml
+  │   ├── algorithm/
+  │   ├── models/
+  │   ├── training/
+  │   ├── reward/
+  │   ├── battle/
+  │   ├── server/
+  │   ├── eval/
+  │   └── wandb/
     ├── train.py           # Script d'entraînement
     ├── eval.py            # Script d'évaluation
     └── src/
@@ -57,17 +68,19 @@ node pokemon-showdown start --no-security
 
 ```bash
 cd pokerl
-python train.py                              # config.yaml par défaut
-python train.py --config custom.yaml         # config personnalisée
-python train.py --resume models/best.zip     # reprendre un entraînement
+python train.py
+python train.py algorithm=recurrentppo
+python train.py resume_path=models/best.zip
+python train.py training.total_timesteps=200000
+python train.py wandb.project=YOUR_PROJECT wandb.entity=YOUR_TEAM
 ```
 
 **3. Évaluer un modèle entraîné** :
 
 ```bash
-python eval.py --model models/pokerl_final.zip
-python eval.py --model models/best/best_model.zip --opponent heuristic --battles 200
-python eval.py --model models/pokerl_final.zip --render
+python eval.py eval.model_path=models/pokerl_final.zip
+python eval.py eval.model_path=models/best/best_model.zip eval.opponent=heuristic eval.n_battles=200
+python eval.py eval.model_path=models/pokerl_final.zip eval.render=true
 ```
 
 ---
@@ -138,82 +151,52 @@ Les callbacks s'adaptent automatiquement : `MaskableEvalCallback` pour les algos
 
 ---
 
-## Configuration — `config.yaml`
+## Configuration — Hydra (`pokerl/configs/`)
 
-Tous les paramètres editables se trouvent dans `pokerl/config.yaml` :
+Tous les paramètres editables sont maintenant composés via Hydra :
 
 ### Serveur
 
-```yaml
-server:
-  host: "localhost"
-  port: 8000
-```
+`pokerl/configs/server/localhost.yaml`
 
 ### Format de combat
 
-```yaml
-battle:
-  format: "gen8randombattle" # gen8randombattle, gen9randombattle, …
-```
+`pokerl/configs/battle/gen8randombattle.yaml`
 
 ### Algorithme RL
 
-```yaml
-algorithm: "MaskablePPO" # MaskablePPO | RecurrentPPO | DQN
-```
+`pokerl/configs/algorithm/*.yaml` via `algorithm=maskableppo|recurrentppo|dqn`
 
 ### Récompense
 
-```yaml
-reward:
-  class: "DenseReward" # DenseReward | AggressiveReward
-  fainted_value: 2.0 # Poids par K.O.
-  hp_value: 1.0 # Poids des PV (normalisés)
-  status_value: 0.5 # Poids des statuts
-  victory_value: 15.0 # Bonus/malus fin de combat
-```
+`pokerl/configs/reward/dense.yaml`
 
 ### Hyperparamètres PPO (MaskablePPO / RecurrentPPO)
 
-```yaml
-ppo:
-  learning_rate: 0.0003
-  n_steps: 2048 # Taille du rollout
-  batch_size: 64
-  n_epochs: 10 # Passes de gradient par rollout
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  ent_coef: 0.01 # Entropie (exploration)
-  policy: "MlpPolicy" # MlpPolicy | MlpLstmPolicy (RecurrentPPO uniquement)
-  net_arch: [256, 256]
-```
+`pokerl/configs/models/ppo.yaml`
 
 ### Hyperparamètres DQN
 
-```yaml
-dqn:
-  learning_rate: 0.0001
-  buffer_size: 50_000 # Taille du replay buffer
-  learning_starts: 1_000 # Steps avant le 1er update
-  batch_size: 32
-  gamma: 0.99
-  exploration_initial_eps: 1.0
-  exploration_final_eps: 0.05
-  net_arch: [256, 256]
-```
+`pokerl/configs/models/dqn.yaml`
 
 ### Adversaires
 
-```yaml
-training:
-  opponent: "random" # random | max_power | heuristic
-  total_timesteps: 100_000
+`pokerl/configs/training/default.yaml` et `pokerl/configs/eval/default.yaml`
 
-eval:
-  opponent: "max_power" # random | max_power | heuristic
-  n_battles: 100
+### Weights & Biases
+
+Configurer le projet/équipe ici : `pokerl/configs/wandb/default.yaml`
+
+```yaml
+enabled: true
+project: "YOUR_PROJECT"
+entity: "YOUR_TEAM"
+```
+
+Ou en override CLI :
+
+```bash
+python train.py wandb.project=YOUR_PROJECT wandb.entity=YOUR_TEAM
 ```
 
 | Adversaire  | Description                                           |

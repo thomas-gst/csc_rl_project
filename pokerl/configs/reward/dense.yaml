@@ -1,0 +1,6 @@
+class: DenseReward
+fainted_value: 2.0
+hp_value: 1.0
+status_value: 0.5
+victory_value: 15.0
+num_pokemon: 6

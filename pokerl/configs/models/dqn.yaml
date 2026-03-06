@@ -1,0 +1,14 @@
+learning_rate: 0.0001
+buffer_size: 50_000      # Taille du replay buffer
+learning_starts: 1_000   # Steps avant le premier update
+batch_size: 32
+gamma: 0.99
+tau: 1.0                 # Taux de mise à jour du réseau cible (soft update)
+target_update_interval: 1_000
+exploration_fraction: 0.1
+exploration_initial_eps: 1.0
+exploration_final_eps: 0.05
+policy: MlpPolicy
+net_arch:
+  - 256
+  - 256
