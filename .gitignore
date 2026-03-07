@@ -1,0 +1,10 @@
+/logs
+/poke_model_checkpoint
+/pokemon-showdown
+/ps-ppo
+/pokemon-showdown
+/runs
+/poke_model_critic_warmed
+__pycache__/
+*.npz
+*.pt
