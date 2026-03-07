@@ -1,4 +1,4 @@
 n_battles: 100
-opponent: random
+opponent: heuristic
 model_path: ""
 render: false

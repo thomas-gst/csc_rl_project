@@ -47,6 +47,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from src.environment import make_env, PokeRLEnv, MaskableSingleAgentWrapper
+from src.pipeline_ppo import (
+    ObservationUnpacker,
+    PipelineMaskablePolicy,
+    PipelineObservationWrapper,
+    PipelineStatsCallback,
+    PokeEnvKnowledgeBase,
+    make_pipeline_policy_kwargs,
+)
 from src.rewards import build_reward
 
 
@@ -248,6 +256,10 @@ def build_model(
         )
 
     cls = ALGO_REGISTRY[algo_name]
+    use_pipeline = bool(getattr(cfg.ppo, "use_pipeline", False))
+
+    if use_pipeline and algo_name != "MaskablePPO":
+        raise ValueError("La pipeline Transformer est actuellement supportée uniquement avec MaskablePPO.")
 
     # --- Reprise d'un entraînement existant ---
     if resume_path:
@@ -260,6 +272,25 @@ def build_model(
         # Configuration commune PPO-like
         ppo = cfg.ppo
         net_arch = list(ppo.net_arch)
+        if use_pipeline:
+            return cls(
+                policy=PipelineMaskablePolicy,
+                env=env,
+                learning_rate=float(ppo.learning_rate),
+                n_steps=int(ppo.n_steps),
+                batch_size=int(ppo.batch_size),
+                n_epochs=int(ppo.n_epochs),
+                gamma=float(ppo.gamma),
+                gae_lambda=float(ppo.gae_lambda),
+                clip_range=float(ppo.clip_range),
+                ent_coef=float(ppo.ent_coef),
+                vf_coef=float(ppo.vf_coef),
+                max_grad_norm=float(ppo.max_grad_norm),
+                policy_kwargs=make_pipeline_policy_kwargs(env.action_space.n),
+                tensorboard_log=str(log_dir),
+                seed=seed,
+                verbose=0,
+            )
         return cls(
             policy=ppo.policy,
             env=env,
@@ -333,6 +364,31 @@ def make_opponent(name: str, battle_format: str, server_cfg: ServerConfiguration
     return cls(battle_format=battle_format, server_configuration=server_cfg)
 
 
+def make_runtime_env(
+    cfg: DictConfig,
+    opponent_name: str,
+    reward_fn: Any,
+    *,
+    use_pipeline: bool,
+):
+    server_cfg = make_server_config(cfg)
+    opponent = make_opponent(opponent_name, cfg.battle.format, server_cfg)
+    env = make_env(
+        reward_fn=reward_fn,
+        opponent=opponent,
+        battle_format=cfg.battle.format,
+        server_configuration=server_cfg,
+        log_level=logging.WARNING,
+    )
+    if not use_pipeline:
+        return env
+    return PipelineObservationWrapper(
+        env,
+        kb=PokeEnvKnowledgeBase(gen=9),
+        unpacker=ObservationUnpacker(),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Entraînement
 # ─────────────────────────────────────────────────────────────────────────────
@@ -344,34 +400,30 @@ def _reward_dict(cfg: DictConfig) -> dict[str, Any]:
 def train(cfg: DictConfig, resume_path: str | None = None):
     """Lance l'entraînement avec l'algorithme défini dans cfg.algorithm.name."""
 
-    server_cfg = make_server_config(cfg)
     battle_format = cfg.battle.format
     algo_name = cfg.algorithm.name
+    use_pipeline = bool(getattr(cfg.ppo, "use_pipeline", False))
 
     # ── Récompense ──
     reward_fn = build_reward(_reward_dict(cfg))
 
     # ── Environnement d'entraînement ──
     train_opponent_name = cfg.training.opponent
-    opponent = make_opponent(train_opponent_name, battle_format, server_cfg)
-    env = make_env(
-        reward_fn=reward_fn,
-        opponent=opponent,
-        battle_format=battle_format,
-        server_configuration=server_cfg,
-        log_level=logging.WARNING,
+    env = make_runtime_env(
+        cfg,
+        train_opponent_name,
+        reward_fn,
+        use_pipeline=use_pipeline,
     )
 
     # ── Environnement d'évaluation ──
     eval_reward_fn = build_reward(_reward_dict(cfg))
     eval_opponent_name = cfg.eval.opponent
-    eval_opponent = make_opponent(eval_opponent_name, battle_format, server_cfg)
-    eval_env = make_env(
-        reward_fn=eval_reward_fn,
-        opponent=eval_opponent,
-        battle_format=battle_format,
-        server_configuration=server_cfg,
-        log_level=logging.WARNING,
+    eval_env = make_runtime_env(
+        cfg,
+        eval_opponent_name,
+        eval_reward_fn,
+        use_pipeline=use_pipeline,
     )
 
     # ── Dossiers ──
@@ -385,10 +437,8 @@ def train(cfg: DictConfig, resume_path: str | None = None):
     algo_section = cfg[algo_cfg_key]
     algo_learning_rate = algo_section.learning_rate
     ppo_ent_coef = cfg.ppo.ent_coef
-    run_name = (
-        f"{algo_name}_lr{algo_learning_rate}"
-        f"_entcoef{ppo_ent_coef}_opp{train_opponent_name}"
-    )
+    algo_label = f"Pipeline{algo_name}" if use_pipeline else algo_name
+    run_name = f"{algo_label}_lr{algo_learning_rate}" f"_entcoef{ppo_ent_coef}_opp{train_opponent_name}"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_log_dir = base_log_dir / f"{run_name}_{timestamp}"
     run_log_dir.mkdir(parents=True, exist_ok=True)
@@ -436,6 +486,14 @@ def train(cfg: DictConfig, resume_path: str | None = None):
             log_freq_steps=cfg.wandb.log_freq_steps,
         ),
     ]
+    if use_pipeline:
+        callbacks.append(
+            PipelineStatsCallback(
+                enabled=True,
+                log_freq_steps=cfg.wandb.log_freq_steps,
+                wandb_module=wandb,
+            )
+        )
     if wandb_enabled and WandbCallback is not None:
         callbacks.append(WandbCallback(verbose=0))
     callback = CallbackList(callbacks)
@@ -448,11 +506,12 @@ def train(cfg: DictConfig, resume_path: str | None = None):
     print(f"  PokeRL — Entraînement {algo_name}")
     print(f"  Format       : {battle_format}")
     print(f"  Timesteps    : {total_timesteps:,}")
-    print(f"  Observation  : {env.observation_space.shape}")
+    print(f"  Observation  : {env.observation_space}")
     print(f"  Actions      : {env.action_space.n}")
     print(f"  Récompense   : {cfg['reward']['class']}")
     print(f"  Net arch     : {net_arch}")
     print(f"  Action mask  : {masking_label}")
+    print(f"  Pipeline     : {'active' if use_pipeline else 'inactive'}")
     print(f"  Adv. train   : {train_opponent_name}")
     print(f"  Adv. eval    : {eval_opponent_name}")
     print(f"  Logs         : {run_log_dir}")
