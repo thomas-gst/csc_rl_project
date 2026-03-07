@@ -1,0 +1,72 @@
+\section{Environment}
+\label{section:environment}
+
+The environment is implemented with \texttt{poke-env}, connected to a local Pokemon Showdown server.
+In our code, \texttt{PokeRLEnv} extends \texttt{SinglesEnv} (multi-agent), and is wrapped by
+\texttt{MaskableSingleAgentWrapper} to expose a standard single-agent \texttt{gymnasium.Env}
+interface for Stable-Baselines3.
+
+At each decision step, \texttt{poke-env} provides a \texttt{Battle} object (state snapshot of the
+current turn). Our observation pipeline is:
+\[
+\texttt{Battle state} \;\longrightarrow\; \texttt{embed\_battle(battle)} \;\longrightarrow\; \mathbf{s}_t \in \mathbb{R}^{490}.
+\]
+
+The \texttt{Battle} object is not a flat vector: it is a structured Python object with many fields.
+Our encoder reads only the fields needed for policy learning:
+\begin{itemize}
+	\item active Pokemon on both sides (HP fraction, types, boosts, status),
+	\item known moves of the active Pokemon,
+	\item revealed team members on both sides (bench information),
+	\item side conditions (entry hazards and screens),
+	\item global effects (weather and field effects),
+	\item availability flags for battle gimmicks (Dynamax, Mega, Z-Move, Tera).
+\end{itemize}
+
+This is still a partially observable setting: opponent information is only available when revealed
+during battle (e.g., observed Pokemon and seen moves).
+
+The state vector is built by concatenating feature blocks in a fixed order:
+\[
+\mathbf{s}_t = [\mathbf{s}^{ally\_active},\; \mathbf{s}^{ally\_moves},\; \mathbf{s}^{opp\_active},\; \mathbf{s}^{opp\_moves},\; \mathbf{s}^{ally\_bench},\; \mathbf{s}^{opp\_bench},\; \mathbf{s}^{side},\; \mathbf{s}^{weather},\; \mathbf{s}^{field},\; \mathbf{s}^{gimmick}].
+\]
+
+\begin{itemize}
+	\item \textbf{Ally active Pokemon (33)}: HP fraction (1), type multi-hot over 18 types,
+	7 normalized stat boosts (\(-6\) to \(+6\) scaled to \([-1,1]\)), and status one-hot (7).
+
+	\item \textbf{Ally active moves (92)}: 4 fixed slots, each encoded with 23 values:
+	move type one-hot (18), base power/250, accuracy/100, category bits (physical/special),
+	and normalized PP \(\texttt{current\_pp}/\texttt{max\_pp}\).
+
+	\item \textbf{Opponent active Pokemon (33)}: same encoding as ally active Pokemon.
+
+	\item \textbf{Known opponent moves (220)}: up to 10 known moves, 22 values each
+	(same as above \emph{without} PP, because opponent PP is not exposed by the server).
+	Unknown slots are zero-padded.
+
+	\item \textbf{Ally bench (40)} and \textbf{opponent bench (40)}:
+	5 slots per side, each slot has HP fraction (1) + status one-hot (7), for 8 values per slot.
+	Missing/unrevealed slots are zero-padded.
+
+	\item \textbf{Side conditions (14)}:
+	for each side, 4 hazard values (Stealth Rock, Spikes layers, Toxic Spikes layers, Sticky Web)
+	and 3 binary screen flags (Reflect, Light Screen, Aurora Veil).
+
+	\item \textbf{Weather (8)}: one-hot over the supported weather states.
+
+	\item \textbf{Field effects (6)}: one-hot over terrain/global field effects
+	(Electric/Grassy/Misty/Psychic Terrain, Trick Room, Gravity).
+
+	\item \textbf{Gimmick availability (4)}:
+	\([\texttt{can\_dynamax},\texttt{can\_mega\_evolve},\texttt{can\_tera},\texttt{can\_z\_move}]\).
+\end{itemize}
+
+Therefore, the final observation size is:
+\[
+33 + 92 + 33 + 220 + 40 + 40 + 14 + 8 + 6 + 4 = 490.
+\]
+
+All features are cast to \texttt{float32}. Continuous values are normalized (HP, boosts,
+power, accuracy, PP), categorical values are encoded as one-hot/multi-hot vectors, and variable-length
+information (moves, bench, revealed opponent data) is converted to fixed-size blocks by zero-padding.
