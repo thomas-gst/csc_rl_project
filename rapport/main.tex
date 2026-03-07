@@ -1,0 +1,73 @@
+% il existe plusieures classes de documents
+% pour des documents plus longs, vous pouvez utiliser
+% book ou report
+\documentclass[a4paper]{article} 
+
+
+
+% vous pouvez changer les paramètres : voici les options dispoinibles :
+% - a4paper
+% - fancysections
+% - notitlepage ou titlepage
+% - onside ou twoside selon si vous voulez l'imprimer en recto-verso ou en recto
+% - sectionmark
+% - chaptermark (pour les 
+% - pagenumber
+% - enmanquedinspiration
+% en cas de doutes, pas de doutes, la documentation est sur :
+%  https://gitlab.binets.fr/typographix/polytechnique/-/blob/master/source/polytechnique.pdf
+\usepackage[a4paper,  fancysections,  titlepage]{polytechnique}
+\usepackage[french]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{blindtext}
+\usepackage[hidelinks]{hyperref}
+\usepackage{amsmath, amssymb}
+
+
+
+% nous avons défini deux commandes :
+\newcommand{\code}[1]{%
+    \mbox{\ttfamily%
+        \detokenize{#1}%
+    }%
+}
+
+\newcommand{\resultat}[1]{%
+    \quad \rightsquigarrow \quad #1%
+}
+
+\author{
+	Côme Rochas, Thomas Gastellu\\ 
+	Benjamin Selles, Leonel Gomes Abreu\\
+	Théo Clary
+}
+\date{\today}
+\title{Pokemon RL Project}%
+\subtitle{EA Reinforcement Learning}%
+% pour changer de logo, ajoutez l'image dans un fomat PDF
+% ou image en la glissant à droite et remplacez typographix
+% par le nom de l'image, si vous ne voulez pas de logo, 
+% supprimze la ligne. 
+\logo{logo}
+
+\begin{document}
+	\maketitle 
+	\tableofcontents
+	\pagebreak
+	\input{sections/intro.tex}
+	\pagebreak
+	\input{sections/environment.tex}
+	\pagebreak
+	\input{sections/models.tex}
+	\pagebreak
+	\input{sections/training.tex}
+	\pagebreak
+	\input{sections/results.tex}
+	\pagebreak
+	\input{sections/appendix.tex}
+	\pagebreak
+	\begin{thebibliography}{}
+		\bibitem{kalose2018optimal}{Kalose, Akshay and Kaya, Kris and Kim, Alvin. 2018. Optimal battle strategy in pokemon using reinforcement learning. \emph{Web: https://web. stanford. edu/class/aa228/reports/2018/final151. pdf}.}
+		\bibitem{jain2025large}{Jain, Daksh and Jain, Aarya and Desai, Ashutosh and Verma, Avyakt and Bhanuka, Ishan and Narang, Pratik and Kumar, Dhruv. 2025. Large Language Models as Pok$\backslash$'emon Battle Agents: Strategic Play and Content Generation. \emph{arXiv preprint arXiv:2512.17308}.}
+	\end{thebibliography}
+\end{document}
