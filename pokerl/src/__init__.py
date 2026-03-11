@@ -12,11 +12,21 @@ from .pipeline_ppo import (
     enrich_obs_with_poke_env,
 )
 from .rewards import DenseReward, BaseReward
+from .behavioral_cloning import (
+    ExpertDemonstrationCollector,
+    save_demonstrations,
+    load_demonstrations,
+    train_bc,
+)
 
 __all__ = [
     "PokeRLEnv",
     "embed_battle",
     "OBSERVATION_SIZE",
+    "ExpertDemonstrationCollector",
+    "save_demonstrations",
+    "load_demonstrations",
+    "train_bc",
     "PokemonEncoderConfig",
     "PokeTransformer",
     "ObservationUnpacker",

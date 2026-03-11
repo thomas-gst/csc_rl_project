@@ -5,9 +5,10 @@ defaults:
   - training: default
   - eval: default
   - algorithm: maskableppo
-  - models@ppo: pipeline_ppo    #ppo pour le classique, pipeline_ppo pour la version SOTA
+  - models@ppo: ppo #ppo pour le classique, pipeline_ppo pour la version SOTA
   - models@dqn: dqn
   - wandb: default
+  - bc: default
   - _self_
 
 resume_path: null

@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Behavioral Cloning → DAgger — hyperparamètres
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Expert utilisé pour la collecte et le labelage (tous rounds) ──
+expert: heuristic # heuristic | max_power
+
+# ── Round 0 : collecte initiale de l'expert ──
+# Adversaire contre lequel l'expert joue au round 0
+opponent: max_power # random | max_power | heuristic
+# Nombre d'épisodes de la collecte initiale
+n_episodes: 2000
+# Epochs d'entraînement supervisé sur la collecte initiale
+n_epochs: 15
+
+# ── Rounds DAgger 1..N ──
+# Nombre d'itérations DAgger après le round 0 (0 = BC pur, pas de DAgger)
+n_dagger_rounds: 3
+# Épisodes joués par la politique courante à chaque round DAgger
+episodes_per_round: 2000
+# Epochs de re-entraînement sur le dataset agrégé après chaque round DAgger
+epochs_per_round: 5
+# Adversaires cyclés à chaque round DAgger (round_idx % len(opponents))
+opponents:
+  - heuristic
+  - max_power
+  - random
+
+# ── Entraînement supervisé commun ──
+batch_size: 128
+learning_rate: 0.001
+
+# ── Persistance ──
+save_demos: true
+demos_path: data/bc_demos.npz
+
+# ── Validation ──
+# Parties jouées contre l'adversaire d'évaluation après chaque epoch
+eval_episodes: 200
+
+# ── Early Stopping ──
+# 0 = désactivé (comportement précédent).
+# Métrique surveillée : win rate si eval_episodes > 0, sinon loss de training.
+early_stopping_patience: 5
+early_stopping_min_delta: 0.005
