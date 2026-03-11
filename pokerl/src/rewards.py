@@ -13,8 +13,6 @@ from typing import Dict
 from weakref import WeakKeyDictionary
 
 from poke_env.battle.abstract_battle import AbstractBattle
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Classe abstraite
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,6 +117,60 @@ class AggressiveReward(DenseReward):
         kwargs.setdefault("status_value", 0.25)
         kwargs.setdefault("victory_value", 15.0)
         super().__init__(**kwargs)
+        
+# ─────────────────────────────────────────────────────────────────────────────
+# Récompense d'imitation du SimpleHeuristicsPlayer
+# ─────────────────────────────────────────────────────────────────────────────
+class HeuristicExpertReward(BaseReward):
+    """Récompense d'imitation : +match_reward si l'agent choisit la même action
+    que ``SimpleHeuristicsPlayer`` aurait choisie dans le même état.
+
+    Fonctionnement :
+        L'action de l'agent et la recommandation de l'expert sont capturées
+        *avant* l'appel à ``env.step()`` via ``set_pre_step()``, qui est
+        invoqué par ``MaskableSingleAgentWrapper.step()`` lorsqu'un oracle
+        est configuré.  ``__call__`` lit ensuite ces valeurs stockées.
+
+    Paramètres :
+        match_reward  — récompense quand l'agent imite l'expert (défaut 1.0).
+    """
+
+    def __init__(self, match_reward: float = 1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.match_reward = float(match_reward)
+        # battle → (agent_action, expert_action) avant chaque step
+        self._pre_step: WeakKeyDictionary[AbstractBattle, tuple[int, int]] = WeakKeyDictionary()
+
+    def set_pre_step(
+        self,
+        battle: AbstractBattle,
+        agent_action: int,
+        expert_action: int,
+    ) -> None:
+        """Appelé par ``MaskableSingleAgentWrapper.step()`` AVANT ``env.step()``.
+
+        :param battle:        État de combat actuel (point de vue de l'agent).
+        :param agent_action:  Action entière choisie par l'agent RL.
+        :param expert_action: Action entière que l'oracle aurait choisie
+                              (-2 = ordre par défaut / conversion impossible).
+        """
+        self._pre_step[battle] = (int(agent_action), int(expert_action))
+
+    def _state_value(self, battle: AbstractBattle) -> float:
+        # Non utilisé : on surcharge __call__ directement.
+        return 0.0
+
+    def __call__(self, battle: AbstractBattle) -> float:
+        """Retourne match_reward si l'agent a imité l'expert, sinon 0."""
+        data = self._pre_step.pop(battle, None)
+        if data is None:
+            return 0.0
+        agent_action, expert_action = data
+        # expert_action == -2 signifie que la conversion a échoué → pas de signal
+        if expert_action == -2:
+            return 0.0
+        return self.match_reward if agent_action == expert_action else 0.0
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,6 +179,7 @@ class AggressiveReward(DenseReward):
 REWARD_REGISTRY: Dict[str, type] = {
     "DenseReward": DenseReward,
     "AggressiveReward": AggressiveReward,
+    "HeuristicExpertReward": HeuristicExpertReward,
 }
 
 

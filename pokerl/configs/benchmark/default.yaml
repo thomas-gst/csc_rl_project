@@ -1,0 +1,5 @@
+model_path: models/best/best_model.zip
+architecture: ${algorithm.name}
+opponent: Random
+n_battles: 1000
+render: false

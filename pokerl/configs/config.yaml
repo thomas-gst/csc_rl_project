@@ -5,6 +5,7 @@ defaults:
   - training: default
   - distributed: default
   - eval: default
+  - benchmark: default
   - algorithm: maskableppo
   - models@ppo: ppo
   - models@dqn: dqn

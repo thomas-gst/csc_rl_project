@@ -12,6 +12,8 @@ pokerl/src/__pycache__/*
 
 POKERL_ARCHITECTURE.md
 
+server_utils
+
 # macOS
 .DS_Store
 **/.DS_Store

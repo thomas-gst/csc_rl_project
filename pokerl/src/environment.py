@@ -266,11 +266,17 @@ class MaskableSingleAgentWrapper(SingleAgentWrapper):
 
     Hérite du ``SingleAgentWrapper`` de poke-env et ajoute simplement
     la méthode ``action_masks()`` qui délègue à ``PokeRLEnv.action_masks()``.
+
+    :param oracle: Joueur optionnel (ex : ``SimpleHeuristicsPlayer``) utilisé
+        comme expert pour les récompenses d'imitation.  Si la fonction de
+        récompense expose ``set_pre_step()``, l'oracle est consulté *avant*
+        chaque ``env.step()`` pour capturer sa recommandation.
     """
 
-    def __init__(self, env: PokeRLEnv, opponent: Player):
+    def __init__(self, env: PokeRLEnv, opponent: Player, oracle: Optional[Player] = None):
         super().__init__(env, opponent)
         self._pokerl_env = env
+        self._oracle = oracle
 
     @staticmethod
     def _is_default_only_turn(battle: Battle | None) -> bool:
@@ -306,6 +312,27 @@ class MaskableSingleAgentWrapper(SingleAgentWrapper):
 
         agent_action = np.int64(-2) if self._is_default_only_turn(self.env.battle1) else action
 
+        # ─ Imitation reward hook ──────────────────────────────────────────────────
+        # Appelé AVANT env.step() : on capture l'action de l'agent et la
+        # recommandation de l'oracle sur le même état pré-step.
+        reward_fn = self._pokerl_env._reward_fn
+        if (
+            self._oracle is not None
+            and hasattr(reward_fn, "set_pre_step")
+            and not self._is_default_only_turn(self.env.battle1)
+        ):
+            try:
+                from typing import Awaitable as _Awaitable
+                expert_order = self._oracle.choose_move(self.env.battle1)
+                if not isinstance(expert_order, _Awaitable):
+                    expert_action = self._safe_order_to_action(expert_order, self.env.battle1)
+                    reward_fn.set_pre_step(
+                        self.env.battle1, int(agent_action), int(expert_action)
+                    )
+            except Exception:
+                pass  # échec silencieux — set_pre_step ne sera pas appelé
+        # ────────────────────────────────────────────────────────────────────
+
         opp_order = self.opponent.choose_move(self.env.battle2)
         assert not isinstance(opp_order, Awaitable)
         if self._is_default_only_turn(self.env.battle2):
@@ -340,6 +367,7 @@ def make_env(
     battle_format: str = "gen8randombattle",
     server_configuration: Optional[ServerConfiguration] = None,
     log_level: Optional[int] = None,
+    oracle: Optional[Player] = None,
 ) -> MaskableSingleAgentWrapper:
     """Crée un ``gymnasium.Env`` mono-agent avec action masking.
 
@@ -348,6 +376,9 @@ def make_env(
     :param battle_format: Format de combat Showdown.
     :param server_configuration: Configuration du serveur.
     :param log_level: Niveau de logging (logging.INFO, logging.WARNING, etc.).
+    :param oracle: Joueur optionnel utilisé comme expert pour les récompenses
+        d'imitation (ex : ``SimpleHeuristicsPlayer(start_listening=False)``).
+        Requis si la fonction de récompense est ``HeuristicExpertReward``.
     :return: Environnement Gymnasium prêt pour SB3 / MaskablePPO.
     """
     server_cfg = server_configuration or LocalhostServerConfiguration
@@ -367,4 +398,4 @@ def make_env(
             log_level=log_level,
         )
 
-    return MaskableSingleAgentWrapper(env, opponent)
+    return MaskableSingleAgentWrapper(env, opponent, oracle=oracle)
