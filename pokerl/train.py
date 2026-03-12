@@ -278,7 +278,27 @@ def build_model(
             seed=seed,
             verbose=0,
         )
-
+    if algo_name == "AttentionPPO":
+            # Configuration commune PPO-like
+            att_ppo = cfg.att_ppo
+            return cls(
+                policy=att_ppo.policy,
+                env=env,
+                learning_rate=float(att_ppo.learning_rate),
+                n_steps=int(att_ppo.n_steps),
+                batch_size=int(att_ppo.batch_size),
+                n_epochs=int(att_ppo.n_epochs),
+                gamma=float(att_ppo.gamma),
+                gae_lambda=float(att_ppo.gae_lambda),
+                clip_range=float(att_ppo.clip_range),
+                ent_coef=float(att_ppo.ent_coef),
+                vf_coef=float(att_ppo.vf_coef),
+                max_grad_norm=float(att_ppo.max_grad_norm),
+                policy_kwargs={"cfg": att_ppo},
+                tensorboard_log=str(log_dir),
+                seed=seed,
+                verbose=0,
+            )   
     if algo_name == "DQN":
         #   DQN (stable-baselines3)   — PAS de masquage natif ; les actions
         #   invalides restent sélectionnables. L'env retombe sur un move
@@ -360,6 +380,7 @@ def train(cfg: DictConfig, resume_path: str | None = None):
         battle_format=battle_format,
         server_configuration=server_cfg,
         log_level=logging.WARNING,
+        team=cfg.battle.get("team"),
     )
 
     # ── Environnement d'évaluation ──
@@ -372,6 +393,7 @@ def train(cfg: DictConfig, resume_path: str | None = None):
         battle_format=battle_format,
         server_configuration=server_cfg,
         log_level=logging.WARNING,
+        team=cfg.battle.get("team"),
     )
 
     # ── Dossiers ──

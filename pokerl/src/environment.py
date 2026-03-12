@@ -368,6 +368,7 @@ def make_env(
     server_configuration: Optional[ServerConfiguration] = None,
     log_level: Optional[int] = None,
     oracle: Optional[Player] = None,
+    team: Optional[str] = None, 
 ) -> MaskableSingleAgentWrapper:
     """Crée un ``gymnasium.Env`` mono-agent avec action masking.
 
@@ -389,6 +390,7 @@ def make_env(
         server_configuration=server_cfg,
         start_listening=True,
         log_level=log_level,
+        team=team,
     )
 
     if opponent is None:

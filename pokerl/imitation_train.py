@@ -371,6 +371,7 @@ def train(cfg: DictConfig, resume_path: str | None = None):
         server_configuration=server_cfg,
         log_level=logging.WARNING,
         oracle=oracle,
+        team=cfg.battle.get("team"),
     )
 
     # ── Environnement d'évaluation ──
@@ -383,6 +384,7 @@ def train(cfg: DictConfig, resume_path: str | None = None):
         battle_format=battle_format,
         server_configuration=server_cfg,
         log_level=logging.WARNING,
+        team=cfg.battle.get("team"),
     )
 
     # ── Dossiers ──
