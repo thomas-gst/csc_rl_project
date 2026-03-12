@@ -1,14 +1,15 @@
 defaults:
   - server: localhost
   - battle: gen8randombattle_fixed_team
-  - reward: heuristic_expert
+  - reward: dense
   - training: default
   - distributed: default
   - eval: default
   - benchmark: default
-  - algorithm: maskableppo
+  - algorithm: attppo
   - models@ppo: ppo
   - models@dqn: dqn
+  - models@attppo: attppo
   - wandb: default
   - _self_
 

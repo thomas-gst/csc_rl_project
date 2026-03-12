@@ -1,0 +1,18 @@
+learning_rate: 0.0001
+n_steps: 1024            # Pas par rollout avant update
+batch_size: 128
+n_epochs: 5
+gamma: 0.99              # Facteur de discount
+gae_lambda: 0.95
+clip_range: 0.2
+ent_coef: 0.02           # Coefficient d'entropie (incite l'exploration) donne des bons résultats, je vais réessayer le classique 0.01
+vf_coef: 0.5
+max_grad_norm: 0.5
+policy: AttentionPolicy
+net_arch: # bogus architecture, just so that the inheritance works correctly
+  - 256
+  - 256 
+hidden_dim: 64
+num_heads: 4
+num_layers: 3
+device: cuda

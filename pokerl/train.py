@@ -41,6 +41,7 @@ except ImportError:
 
 from poke_env.player import RandomPlayer, MaxBasePowerPlayer, SimpleHeuristicsPlayer
 from poke_env.ps_client.server_configuration import ServerConfiguration
+from attention_model import AttentionPolicy
 
 # Ajouter le dossier parent au path pour les imports locaux
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -61,11 +62,12 @@ from src.rewards import build_reward
 ALGO_REGISTRY: dict[str, type] = {
     "MaskablePPO":  MaskablePPO,   # ✓ on-policy  | masking ✓ | MLP
     "RecurrentPPO": RecurrentPPO,  # ✓ on-policy  | masking ✓ | LSTM
-    "DQN":          DQN,           # ✗ off-policy | masking ✗ | replay buffer
+    "DQN":          DQN,  
+    "AttentionPPO": MaskablePPO, 
 }
 
 # Algorithmes qui supportent l'Action Masking (MaskableEvalCallback requis)
-MASKABLE_ALGOS = {"MaskablePPO", "RecurrentPPO"}
+MASKABLE_ALGOS = {"MaskablePPO", "RecurrentPPO", "AttentionPPO"}
 
 
 class WandbMetricsCallback(BaseCallback):
@@ -280,21 +282,21 @@ def build_model(
         )
     if algo_name == "AttentionPPO":
             # Configuration commune PPO-like
-            att_ppo = cfg.att_ppo
+            attppo = cfg.attppo
             return cls(
-                policy=att_ppo.policy,
+                policy=AttentionPolicy,
                 env=env,
-                learning_rate=float(att_ppo.learning_rate),
-                n_steps=int(att_ppo.n_steps),
-                batch_size=int(att_ppo.batch_size),
-                n_epochs=int(att_ppo.n_epochs),
-                gamma=float(att_ppo.gamma),
-                gae_lambda=float(att_ppo.gae_lambda),
-                clip_range=float(att_ppo.clip_range),
-                ent_coef=float(att_ppo.ent_coef),
-                vf_coef=float(att_ppo.vf_coef),
-                max_grad_norm=float(att_ppo.max_grad_norm),
-                policy_kwargs={"cfg": att_ppo},
+                learning_rate=float(attppo.learning_rate),
+                n_steps=int(attppo.n_steps),
+                batch_size=int(attppo.batch_size),
+                n_epochs=int(attppo.n_epochs),
+                gamma=float(attppo.gamma),
+                gae_lambda=float(attppo.gae_lambda),
+                clip_range=float(attppo.clip_range),
+                ent_coef=float(attppo.ent_coef),
+                vf_coef=float(attppo.vf_coef),
+                max_grad_norm=float(attppo.max_grad_norm),
+                policy_kwargs={"cfg": attppo},
                 tensorboard_log=str(log_dir),
                 seed=seed,
                 verbose=0,
@@ -403,10 +405,13 @@ def train(cfg: DictConfig, resume_path: str | None = None):
     base_log_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Modèle (factory) ──
-    algo_cfg_key = "ppo" if algo_name in MASKABLE_ALGOS else "dqn"
+    if algo_name == "AttentionPPO":
+        algo_cfg_key = "attppo"
+    else:
+        algo_cfg_key = "ppo" if algo_name in MASKABLE_ALGOS else "dqn"
     algo_section = cfg[algo_cfg_key]
     algo_learning_rate = algo_section.learning_rate
-    ppo_ent_coef = cfg.ppo.ent_coef
+    ppo_ent_coef = algo_section.ent_coef
     run_name = (
         f"{algo_name}_lr{algo_learning_rate}"
         f"_entcoef{ppo_ent_coef}_opp{train_opponent_name}"
