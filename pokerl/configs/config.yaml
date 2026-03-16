@@ -1,7 +1,7 @@
 defaults:
   - server: localhost
   - battle: gen8randombattle_fixed_team
-  - reward: dense
+  - reward: dense 
   - training: default
   - distributed: default
   - eval: default

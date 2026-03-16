@@ -45,9 +45,22 @@ class AttentionExtractor(nn.Module):
             nn.Linear(32, cfg.hidden_dim),
             nn.LayerNorm(cfg.hidden_dim),
         )
-        self.transformer_layers = nn.Sequential(
-            *[nn.TransformerEncoderLayer(d_model=cfg.hidden_dim,nhead=cfg.num_heads, dim_feedforward = 2*cfg.hidden_dim, batch_first=True) for _ in range(cfg.num_layers)],
+        encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.hidden_dim,nhead=cfg.num_heads, dim_feedforward = 2*cfg.hidden_dim, batch_first=True, norm_first=True, activation="gelu")
+        self.transformer_layers = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=cfg.num_layers,
         )
+        
+        self.token_type_embedding = nn.Embedding(9, cfg.hidden_dim)
+        
+        mask = th.zeros(9, 9)
+        # actor and critic cls can't see each other
+        mask[0, 1] = float("-inf")
+        mask[1, 0] = float("-inf")
+
+        # other tokens can't see the cls
+        mask[2:, 0] = float("-inf")
+        self.register_buffer("attention_mask", mask)
         
         self.actor_cls = nn.Parameter(th.randn(1,cfg.hidden_dim))
         self.critic_cls = nn.Parameter(th.randn(1,cfg.hidden_dim))
@@ -86,7 +99,11 @@ class AttentionExtractor(nn.Module):
             embedded_globals,
         ], dim=1)
         
-        output_seq = self.transformer_layers(input_seq)
+        # add token type embeddings
+        token_type_ids = th.arange(9, device=obs.device).unsqueeze(0).expand(batch_size, -1)
+        input_seq = input_seq + self.token_type_embedding(token_type_ids)
+        
+        output_seq = self.transformer_layers(input_seq, mask=self.attention_mask)
         output_actor_cls = output_seq[:,0,:]
         output_critic_cls = output_seq[:,1,:]
         

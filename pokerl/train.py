@@ -15,7 +15,7 @@ Usage :
 """
 
 from __future__ import annotations
-
+import torch as th
 import logging
 import math
 import sys
@@ -495,11 +495,17 @@ def train(cfg: DictConfig, resume_path: str | None = None):
     except KeyboardInterrupt:
         print("\nInterruption — arrêt propre.")
     finally:
-        best_path = model_dir / f"{run_name}_{timestamp}.zip"
-        if best_path.exists():
-            print(f"Meilleur modèle sauvegardé : {best_path}")
-        else:
-            print("Aucun modèle best n'a été sauvegardé.")
+        try:
+            if algo_name == "AttentionPPO":
+                model_path = model_dir / f"{run_name}_{timestamp}.pt"
+                th.save(model.policy.features_extractor.state_dict(), model_path)
+                print(f"Dernier modèle sauvegardé : {model_path}")
+            if algo_name == "MaskablePPO":
+               model_path = model_dir / f"{run_name}_{timestamp}" 
+               model.save(model_path)
+               print(f"Dernier modèle sauvegardé : {model_path}") 
+        except Exception as e:
+            print(f"Aucun modèle best n'a été sauvegardé. Erreur :{e}")
 
         # Nettoyage des environnements
         env.close()
