@@ -1,11 +1,6 @@
-# model.py
-
-# LE MODEL transformer imitant celui du mec, si gemini s'est pas branlé jai pas rechecké cetait pas le but
-
 import json
 import torch
 import torch.nn as nn
-import os
 from typing import Any, Dict, Optional
 from gymnasium.spaces import Space
 from ray.rllib.core import Columns
@@ -16,7 +11,12 @@ class PokeTransformerModule(TorchRLModule, ValueFunctionAPI):
     def __init__(self, observation_space: Space, action_space: Space, inference_only: bool, model_config: Dict[str, Any], catalog_class: Any):
         super().__init__(observation_space=observation_space, action_space=action_space, inference_only=inference_only, model_config=model_config, catalog_class=catalog_class)
         
-        self.d_model = 128
+        # --- PS-PPO HYPERPARAMETERS ---
+        self.d_model = 1024      # Match out_dims["pokemon_vec"]
+        n_heads = 8              # Match n_heads
+        n_layers = 4             # Match n_layers
+        ff_expansion = 4.0       # Match ff_expansion
+        dropout = 0.0            # Match dropout
         
         try:
             with open("vocab.json", "r") as f:
@@ -29,36 +29,59 @@ class PokeTransformerModule(TorchRLModule, ValueFunctionAPI):
         num_abilities = len(vocab.get("pokemon.ability", [])) + 1
         num_moves = len(vocab.get("move.id", [])) + 1
 
-        emb_dim = 16
+        # Match emb_dims
+        emb_dim = 96
         self.pokemon_emb = nn.Embedding(num_embeddings=num_species, embedding_dim=emb_dim)
         self.item_emb = nn.Embedding(num_embeddings=num_items, embedding_dim=emb_dim)
         self.ability_emb = nn.Embedding(num_embeddings=num_abilities, embedding_dim=emb_dim)
         self.move_emb = nn.Embedding(num_embeddings=num_moves, embedding_dim=emb_dim)
 
-        self.field_net = nn.Sequential(
-            nn.Linear(200, self.d_model * 2), nn.GELU(),
-            nn.Linear(self.d_model * 2, self.d_model), nn.LayerNorm(self.d_model)
-        )
-        
-        pok_in_dim = (emb_dim * 7) + (200 - 7)
-        self.pokemon_net = nn.Sequential(
-            nn.Linear(pok_in_dim, self.d_model * 2), nn.GELU(),
-            nn.Linear(self.d_model * 2, self.d_model), nn.LayerNorm(self.d_model)
-        )
+        # Reusable Subnet Builder (Match _build_subnet)
+        def _build_subnet(in_d, out_d, exp):
+            return nn.Sequential(
+                nn.Linear(in_d, int(out_d * exp)), nn.GELU(),
+                nn.Linear(int(out_d * exp), out_d), nn.LayerNorm(out_d)
+            )
 
+        # Subnets
+        self.field_net = _build_subnet(200, self.d_model, ff_expansion)
+        pok_in_dim = (emb_dim * 7) + (200 - 7)
+        self.pokemon_net = _build_subnet(pok_in_dim, self.d_model, ff_expansion)
+
+        # Transformer Block
         self.actor_tok = nn.Parameter(torch.randn(1, 1, self.d_model))
         self.critic_tok = nn.Parameter(torch.randn(1, 1, self.d_model))
         self.total_tokens = 15 
         self.register_buffer("attn_mask", self._build_poke_mask())
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.d_model, nhead=4, dim_feedforward=self.d_model * 2, 
-            batch_first=True, norm_first=True, activation="gelu"
+            d_model=self.d_model, nhead=n_heads, dim_feedforward=int(self.d_model * ff_expansion), 
+            batch_first=True, norm_first=True, activation="gelu", dropout=dropout
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         
+        # --- PS-PPO READOUT LAYER ---
+        self.readout_mha = nn.MultiheadAttention(self.d_model, n_heads, dropout=dropout, batch_first=True)
+        self.readout_norm_attn = nn.LayerNorm(self.d_model)
+        self.readout_norm_ff = nn.LayerNorm(self.d_model)
+        self.readout_net = nn.Sequential(
+            nn.Linear(self.d_model, int(self.d_model * ff_expansion)),
+            nn.GELU(),
+            nn.Linear(int(self.d_model * ff_expansion), self.d_model)
+        )
+
+        # Heads
         self.pi_head = nn.Linear(self.d_model, 26)
-        self.v_head = nn.Linear(self.d_model, 1) 
+        self.v_head = nn.Sequential(
+            nn.Linear(self.d_model, self.d_model // 2),
+            nn.GELU(),
+            nn.Linear(self.d_model // 2, self.d_model // 2),
+            nn.GELU(),
+            nn.Linear(self.d_model // 2, 1)
+        )
+        
+        # Apply strict initialization
+        self._reset_parameters()
 
     def _build_poke_mask(self) -> torch.Tensor:
         mask = torch.zeros(self.total_tokens, self.total_tokens)
@@ -66,6 +89,17 @@ class PokeTransformerModule(TorchRLModule, ValueFunctionAPI):
         mask[0, 1] = float('-inf')     
         mask[1, 0] = float('-inf')     
         return mask
+
+    def _reset_parameters(self):
+        """Match PS-PPO weight initialization perfectly to prevent collapse."""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None: nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Embedding):
+                nn.init.normal_(m.weight, std=0.02)
+        nn.init.normal_(self.actor_tok, std=0.02)
+        nn.init.normal_(self.critic_tok, std=0.02)
 
     def _forward(self, batch: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         obs = batch[Columns.OBS]["observations"] 
@@ -95,10 +129,20 @@ class PokeTransformerModule(TorchRLModule, ValueFunctionAPI):
         
         transformed_seq = self.transformer(seq, mask=self.attn_mask)
 
-        logits = self.pi_head(transformed_seq[:, 0, :])
+        # --- PS-PPO READOUT PASS ---
+        q = self.readout_norm_attn(transformed_seq[:, 0:2, :])
+        kv = self.readout_norm_attn(transformed_seq)
+        
+        # Apply the top 2 rows of the mask to the Readout attention
+        attended, _ = self.readout_mha(query=q, key=kv, value=kv, attn_mask=self.attn_mask[0:2, :])
+        q_out = transformed_seq[:, 0:2, :] + attended
+        q_out = q_out + self.readout_net(self.readout_norm_ff(q_out))
+
+        # Heads read from q_out now!
+        logits = self.pi_head(q_out[:, 0, :])
         masked_logits = torch.where(action_mask > 0.5, logits, torch.tensor(-1e8, device=logits.device, dtype=logits.dtype))
 
-        return {Columns.EMBEDDINGS: transformed_seq, Columns.ACTION_DIST_INPUTS: masked_logits}
+        return {Columns.EMBEDDINGS: q_out, Columns.ACTION_DIST_INPUTS: masked_logits}
 
     def compute_values(self, batch: Dict[str, Any], embeddings: Optional[torch.Tensor] = None) -> torch.Tensor:
         if embeddings is None:

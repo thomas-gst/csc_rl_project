@@ -1,47 +1,108 @@
 # env.py
 
-# setup des environnement d'entrainement 
-
-from typing import Any, Dict
-import numpy as np
 import os
 os.environ["RAY_DISABLE_METRICS_COLLECTION"] = "1" 
-os.environ["RAY_CPP_LOG_LEVEL"] = "3" # Only show FATAL C++ errors
+os.environ["RAY_CPP_LOG_LEVEL"] = "3" 
 import logging
+import torch
 
+import numpy as np
 import numpy.typing as npt
-from gymnasium.spaces import Box, Dict as GymDict
+from typing import Any, Dict
+from gymnasium.spaces import Box, Discrete, Dict as GymDict
 from ray.rllib.env import ParallelPettingZooEnv
+from ray.rllib.core.columns import Columns
 
 from poke_env.battle import AbstractBattle
 from poke_env.environment import SingleAgentWrapper, SinglesEnv
-from poke_env.player import RandomPlayer, SimpleHeuristicsPlayer
+from poke_env.player import Player, RandomPlayer, SimpleHeuristicsPlayer
 from poke_env.ps_client.server_configuration import ServerConfiguration
 from poke_env.player.battle_order import BattleOrder
 
 from feature_extractor import TransformerFeatureExtractor
+from model import PokeTransformerModule
 
 PORTS = [8000 + i for i in range(5)]
+
+# --- THE NEW OPPONENT: PLAYS USING YOUR PYTORCH MODEL ---
+class SelfPlayOpponent(Player):
+    def __init__(self, model_path: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.device = torch.device("cpu") # Keep opponent on CPU to save GPU RAM
+        self.extractor = TransformerFeatureExtractor(num_tokens=13, features_per_token=200)
+        
+        obs_space = GymDict({
+            "observations": Box(low=-10.0, high=np.inf, shape=(13, 200), dtype=np.float32),
+            "action_mask": Box(0.0, 1.0, shape=(26,), dtype=np.float32),
+        })
+        act_space = Discrete(26)
+        
+        self.model = PokeTransformerModule(
+            observation_space=obs_space, action_space=act_space,
+            inference_only=True, model_config={}, catalog_class=None,
+        ).to(self.device)
+        
+        print(f"[Self-Play Bot] Booting up with weights from {model_path}...")
+        self.model.load_state_dict(torch.load(model_path, map_location=self.device), strict=False)
+        self.model.eval()
+
+    def _get_action_mask_and_mapping(self, battle):
+        mask = np.zeros(26, dtype=np.float32)
+        idx_to_order = {}
+        if battle.available_moves:
+            active_moves = list(battle.active_pokemon.moves.values())
+            for move in battle.available_moves:
+                try: move_idx = active_moves.index(move)
+                except ValueError: move_idx = 0
+                mask[move_idx] = 1.0
+                idx_to_order[move_idx] = self.create_order(move)
+                if getattr(battle, 'can_tera', False):
+                    mask[move_idx + 16] = 1.0
+                    idx_to_order[move_idx + 16] = self.create_order(move, terastallize=True)
+                    
+        if battle.available_switches:
+            team = list(battle.team.values())
+            for switch in battle.available_switches:
+                try: switch_idx = team.index(switch)
+                except ValueError: switch_idx = 0
+                mask[20 + switch_idx] = 1.0
+                idx_to_order[20 + switch_idx] = self.create_order(switch)
+        return mask, idx_to_order
+
+    def choose_move(self, battle):
+        try:
+            obs_matrix = self.extractor.extract(battle)
+            mask, mapping = self._get_action_mask_and_mapping(battle)
+        except Exception:
+            return self.choose_random_move(battle)
+
+        obs_tensor = torch.tensor(obs_matrix, dtype=torch.float32).unsqueeze(0).to(self.device)
+        mask_tensor = torch.tensor(mask, dtype=torch.float32).unsqueeze(0).to(self.device)
+        batch_dict = {Columns.OBS: {"observations": obs_tensor, "action_mask": mask_tensor}}
+        
+        with torch.no_grad():
+            out = self.model._forward(batch_dict)
+            logits = out[Columns.ACTION_DIST_INPUTS]
+            best_action_idx = torch.argmax(logits, dim=-1).item()
+            
+        return mapping.get(best_action_idx, self.choose_random_move(battle))
+
 
 class PokeTransformerEnv(SinglesEnv[npt.NDArray[np.float32]]):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.extractor = TransformerFeatureExtractor(num_tokens=13, features_per_token=200)
-        
         self.observation_spaces = {
             agent: GymDict({
                 "observations": Box(low=-10.0, high=np.inf, shape=(13, 200), dtype=np.float32),
                 "action_mask": Box(0.0, 1.0, shape=(26,), dtype=np.float32),
-            })
-            for agent in self.possible_agents
+            }) for agent in self.possible_agents
         }
-    # c'est ici qu'on crée plusieurs environnements et que j'assigne a chaque port
     
     @classmethod
     def create_single_agent_env(cls, config: Dict[str, Any]) -> SingleAgentWrapper:
         worker_idx = getattr(config, "worker_index", 0)
-        ports = PORTS
-        assigned_port = ports[worker_idx % len(ports)]
+        assigned_port = PORTS[worker_idx % len(PORTS)]
 
         server_config = ServerConfiguration(
             f'ws://localhost:{assigned_port}/showdown/websocket', 
@@ -49,18 +110,23 @@ class PokeTransformerEnv(SinglesEnv[npt.NDArray[np.float32]]):
         )
 
         env = cls(battle_format=config["battle_format"], log_level=logging.CRITICAL, strict=False, server_configuration=server_config)
-        opponent = SimpleHeuristicsPlayer(start_listening=False, server_configuration=server_config, log_level=logging.CRITICAL)
+        
+        # --- THE FIX: Spawn the Self-Play Opponent instead of the Heuristic Bot ---
+        pretrained_path = config.get("pretrained_weights", "pretrained_pokeformer_final.pt")
+        opponent = SelfPlayOpponent(
+            model_path=pretrained_path,
+            start_listening=False, 
+            server_configuration=server_config, 
+            log_level=logging.CRITICAL
+        )
         return SingleAgentWrapper(env, opponent)
 
     def action_to_order(self, action: int, battle: AbstractBattle, **kwargs) -> BattleOrder:
-        """Catches poke-env kwargs (like fake=True) and prevents RLlib crashes."""
         try:
             return super().action_to_order(action, battle, **kwargs)
         except (KeyError, ValueError, AssertionError, TypeError):
-            if battle.available_moves:
-                return BattleOrder(battle.available_moves[0])
-            elif battle.available_switches:
-                return BattleOrder(battle.available_switches[0])
+            if battle.available_moves: return BattleOrder(battle.available_moves[0])
+            elif battle.available_switches: return BattleOrder(battle.available_switches[0])
             return BattleOrder("random")
 
     def calc_reward(self, battle) -> float:

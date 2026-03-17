@@ -1,7 +1,4 @@
 # train_bc.py
-# Point d'entre pour l'entrainement en behavioral cloning
-# J'ai ptete tout cassé pck au début j'avais réussi a entrainé mais j'avais oublié d'entrainer le critic
-# j'ai demandé a gemini de me refaire tout mais il a ptete tout cassé
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -15,18 +12,24 @@ import os
 
 from model import PokeTransformerModule
 
+# ==========================================
+# --- THE MASTER SWITCH: SET PHASE HERE ---
+# Phase 1: Train the Actor (Get back to 75% accuracy)
+# Phase 2: Train the Critic (Requires Phase 1 to be finished)
+TRAINING_PHASE = 2 
+# ==========================================
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log_dir = "runs/pokeformer_bc_" + time.strftime("%Y%m%d-%H%M%S")
+    log_dir = f"runs/pokeformer_bc_phase{TRAINING_PHASE}_" + time.strftime("%Y%m%d-%H%M%S")
     writer = SummaryWriter(log_dir=log_dir) 
-    print(f"--- Starting Dual-Head Behavioral Cloning on {device} ---")
+    print(f"--- Starting Behavioral Cloning (PHASE {TRAINING_PHASE}) on {device} ---")
     print(f"Logging to: {log_dir}")
 
     print("Loading Massive Dataset into RAM...")
     data = np.load("expert_data_combined.npz")
     obs_tensor = torch.tensor(data['obs'], dtype=torch.float32)
     action_tensor = torch.tensor(data['actions'], dtype=torch.long)
-    # THE FIX: Load the Critic Targets
     value_tensor = torch.tensor(data['values'], dtype=torch.float32)
     
     dataset = TensorDataset(obs_tensor, action_tensor, value_tensor)
@@ -35,7 +38,7 @@ def main():
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    batch_size = 2048 
+    batch_size = 512 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
 
@@ -45,18 +48,42 @@ def main():
     })
     act_space = gym.spaces.Discrete(26)
 
+    # 1. Instantiate the Base Model
     model = PokeTransformerModule(
         observation_space=obs_space, action_space=act_space,
         inference_only=False, model_config={}, catalog_class=None,
     ).to(device)
 
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    # --- PHASE 2 LOGIC: FREEZE THE ACTOR AND TRANSFORMER ---
+    if TRAINING_PHASE == 2:
+        print("\n[PHASE 2] Freezing the Actor and Transformer. Training ONLY the Critic...")
+        actor_path = "pretrained_pokeformer_actor.pt"
+        if not os.path.exists(actor_path):
+            raise FileNotFoundError(f"Cannot start Phase 2! {actor_path} is missing. Please run Phase 1 first.")
+            
+        # Load the smart brain from Phase 1
+        model.load_state_dict(torch.load(actor_path, map_location=device), strict=False)
+        
+        # Mathematically lock the Actor and Transformer
+        for name, param in model.named_parameters():
+            if "v_head" not in name:
+                param.requires_grad = False
+        print("Actor successfully frozen. Critic unlocked.\n")
+
+    # 2. Define Optimizer (Filter allows PyTorch to ignore frozen weights in Phase 2)
+    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-4)
     
-    # THE FIX: Two separate loss functions!
     criterion_actor = nn.CrossEntropyLoss()
     criterion_critic = nn.MSELoss()
     
-    checkpoint_path = "bc_checkpoint.pt"
+    # 3. Setup distinct save files so phases don't overwrite each other
+    if TRAINING_PHASE == 1:
+        checkpoint_path = "bc_checkpoint_actor.pt"
+        final_save_path = "pretrained_pokeformer_actor.pt"
+    else:
+        checkpoint_path = "bc_checkpoint_critic.pt"
+        final_save_path = "pretrained_pokeformer_final.pt"
+
     start_epoch = 0
     if os.path.exists(checkpoint_path):
         print(f"Found checkpoint at {checkpoint_path}. Resuming training...")
@@ -66,14 +93,13 @@ def main():
         start_epoch = checkpoint['epoch'] + 1
         print(f"Resuming from Epoch {start_epoch}")
 
-    epochs = 15
+    epochs = 17
     
     for epoch in range(start_epoch, epochs):
         model.train()
         total_pi_loss = 0.0
         total_v_loss = 0.0
         
-        # THE FIX: Unpack all 3 variables
         for batch_idx, (b_obs, b_acts, b_vals) in enumerate(train_loader):
             b_obs, b_acts, b_vals = b_obs.to(device), b_acts.to(device), b_vals.to(device)
             B = b_obs.shape[0]
@@ -92,12 +118,14 @@ def main():
             # Extract Critic prediction from the 2nd token
             v_preds = model.v_head(embeddings[:, 1, :]).squeeze(-1)
 
-            # Calculate Dual Loss
             loss_pi = criterion_actor(logits, b_acts)
             loss_v = criterion_critic(v_preds, b_vals)
             
-            # Combine them (Actor is 1.0, Critic is 0.5)
-            loss = loss_pi + (0.5 * loss_v)
+            # --- ROUTE THE GRADIENTS BASED ON PHASE ---
+            if TRAINING_PHASE == 1:
+                loss = loss_pi # Only Actor trains
+            elif TRAINING_PHASE == 2:
+                loss = loss_v  # Only Critic trains
             
             optimizer.zero_grad()
             loss.backward()
@@ -153,13 +181,13 @@ def main():
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'loss': avg_train_pi_loss,
+            'loss': avg_train_pi_loss if TRAINING_PHASE == 1 else avg_train_v_loss,
         }, checkpoint_path)
         print(f"Checkpoint saved to {checkpoint_path}\n")
 
-    torch.save(model.state_dict(), "pretrained_pokeformer_final.pt")
+    torch.save(model.state_dict(), final_save_path)
     writer.close()
-    print("Dual-Head Training Complete! Ready for stable RL!")
+    print(f"Phase {TRAINING_PHASE} Training Complete! Saved to {final_save_path}.")
 
 if __name__ == "__main__":
     main()

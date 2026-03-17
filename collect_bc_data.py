@@ -48,11 +48,13 @@ class HarvestingPlayer(SimpleHeuristicsPlayer):
             matrix = self.extractor.extract(battle)
             action_idx = self._reverse_engineer_action(expert_order, battle)
             
-            # THE FIX: Save to the specific battle's buffer
+            # --- THE FIX: Take ownership of the Battle object ---
             if battle.battle_tag not in self.battle_history:
-                self.battle_history[battle.battle_tag] = []
+                # Store the actual battle object so poke-env can't delete it!
+                self.battle_history[battle.battle_tag] = {"battle": battle, "turns": []}
                 
-            self.battle_history[battle.battle_tag].append((matrix, action_idx))
+            self.battle_history[battle.battle_tag]["turns"].append((matrix, action_idx))
+            # ----------------------------------------------------
         except Exception as e:
             pass
             
@@ -95,15 +97,15 @@ async def run_harvester_node_async(port: int, num_games: int, vs_heuristic: bool
     
     await harvester.battle_against(opponent, n_battles=num_games)
     monitor_task.cancel()
-    
     # --- THE FIX: RETROACTIVE VALUE ASSIGNMENT ---
     all_obs, all_actions, all_values = [], [], []
     
-    for battle_tag, history in harvester.battle_history.items():
-        battle = harvester.battles.get(battle_tag)
-        if battle is None: continue
-            
-        # Your specific env.py scale!
+    # We no longer need to look up the battle in harvester.battles!
+    for battle_tag, record in harvester.battle_history.items():
+        battle = record["battle"]   # Grab our saved reference
+        history = record["turns"]   # Grab the turns
+        
+        # Check the outcome (poke-env still updates this object before the game ends)
         if battle.won: game_value = 30.0
         elif battle.lost: game_value = -30.0
         else: continue 
@@ -184,5 +186,5 @@ def aggregate_existing_chunks():
     print(f"Successfully saved {size_mb:.2f} MB expert dataset to {save_path}!", flush=True)
 
 if __name__ == "__main__":
-    #main()
-    aggregate_existing_chunks()
+    main()
+    #aggregate_existing_chunks()

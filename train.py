@@ -1,11 +1,11 @@
-# Point d'entrée principal pour l'entraînement en ppo
-
+# train.py
 
 import os
 os.environ["RAY_DISABLE_METRICS_COLLECTION"] = "1" 
 os.environ["RAY_CPP_LOG_LEVEL"] = "3" 
 
 import numpy as np
+import torch
 from gymnasium.spaces import Box, Discrete
 from gymnasium.spaces import Dict as GymDict
 from ray.rllib.algorithms.ppo import PPOConfig
@@ -23,23 +23,33 @@ class WinRateCallback(DefaultCallbacks):
         else:
             metrics_logger.log_value("win_rate", 0.0, reduce="mean")
 
+# --- THE MAGIC SYNC FUNCTION ---
+def sync_opponents(env_runner):
+    """Grabs the latest PPO weights and copies them into the Opponent Bot."""
+    try:
+        latest_state = env_runner.module.state_dict()
+    except AttributeError:
+        latest_state = env_runner.module["default_policy"].state_dict()
+        
+    for env_wrapper in env_runner.environments:
+        # Load the updated weights but keep the opponent frozen on the CPU
+        env_wrapper.opponent.model.load_state_dict(latest_state, strict=False)
 
-# actuellement ca entraine vs un bot mais idéalement faudrait le faire jouer contre lui même
 def single_agent_train():
     register_env("showdown", PokeTransformerEnv.create_single_agent_env)
-    # chargement des poids du preentrainement
     PRETRAINED_PATH = os.path.abspath("pretrained_pokeformer_final.pt")
 
     algo_config = (
         PPOConfig()
         .environment(
             "showdown",
-            env_config={"battle_format": "gen9randombattle"}, 
+            # Pass the pretrained path so the Env can boot up the Self-Play bot!
+            env_config={"battle_format": "gen9randombattle", "pretrained_weights": PRETRAINED_PATH}, 
             disable_env_checking=True,
         )
         .learners(num_learners=1, num_gpus_per_learner=1)
         .env_runners(
-            num_env_runners=20,           
+            num_env_runners=10,           
             num_envs_per_env_runner=2,
             sample_timeout_s=800.0,       
             rollout_fragment_length="auto"
@@ -47,9 +57,10 @@ def single_agent_train():
         .callbacks(WinRateCallback)
         .training(
             gamma=0.99,
-            lr=1e-4,               # High learning rate because ONLY the Critic is training
-            train_batch_size_per_learner=8192, 
-            minibatch_size=1024
+            lr=1e-5, # Drop the LR down. PPO Self-Play requires tiny adjustments.
+            entropy_coeff=0.01, # Allow 1% random moves so it discovers new strategies!
+            train_batch_size_per_learner=512, 
+            minibatch_size=64
         )
         .rl_module(
             rl_module_spec=RLModuleSpec(
@@ -69,10 +80,17 @@ def single_agent_train():
     
     algo = algo_config.build_algo()
 
-    print("Starting training loop...")
+    print("Starting Self-Play Training Loop...")
     for i in range(1000): 
         result = algo.train()
         
+        # --- THE SYNC TRIGGER ---
+        # Every 10 iterations, update the opponent to match the new, smarter AI
+        if i % 10 == 0 and i > 0:
+            print(f"\n[!] Iteration {i}: Syncing latest brain to Self-Play Opponents! Win rate will drop to 50%.\n")
+            algo.env_runner_group.foreach_env_runner(sync_opponents)
+        # ------------------------
+
         runners_stats = result.get("env_runners", {})
         agent_returns = runners_stats.get("agent_episode_return_mean", {})
         reward = agent_returns.get("default_agent", 0.0)
@@ -83,11 +101,11 @@ def single_agent_train():
         if isinstance(reward, str):
             print(f"Iter {i}: Waiting for games to finish...")
         else:
-            print(f"Iter {i}: Mean Return = {reward:.3f} | Win Rate = {win_percentage:.1f}%")
+            print(f"Iter {i}: Mean Return = {reward:.3f} | Win Rate vs Self = {win_percentage:.1f}%")
 
-    print("Saving model...")
+    print("Saving Self-Play model...")
     save_path = os.path.abspath("poke_model_checkpoint")
-    checkpoint_dir = algo.save(save_path)
+    algo.save(save_path)
     print(f"Model successfully saved at: {save_path}")
     
     algo.stop()

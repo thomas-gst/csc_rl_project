@@ -22,4 +22,4 @@ utile pour savoir si l'entrainement se lance bien, si vs pouvez encore augmenter
 
 - si vous utilisez vs-code pour vous connecter au ssh vous pouvez directemnet forward les ports depuis vscode c'est super pratique
 
-- les logs de ray pour tensorboard sont dans votre dossier home (cd ~/rayjspquoi)
+- les logs de ray pour tensorboardsont dans votre dossier home (cd ~/rayjspquoi)
